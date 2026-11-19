@@ -1,0 +1,83 @@
+name: Phase 5 - OS-1 KDE/KWin Wayland Graphical Desktop
+
+on:
+  push:
+    branches:
+      - master
+      - 'os1/**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: phase5-wayland-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase5-wayland-desktop:
+    name: Build OS-1 Wayland Desktop & Verify KWin/Plasma + Screenshot in QEMU
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space on runner
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
+
+      - name: Install build and QEMU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            cpio \
+            kmod \
+            xz-utils \
+            mmdebstrap \
+            debian-archive-keyring \
+            e2fsprogs \
+            qemu-system-x86 \
+            file
+
+      - name: Run OS-1 repository audit (T0-AUDIT)
+        run: ./distro/tools/os1.sh audit
+
+      - name: Restore cached OS-1 x86_64 kernel
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: distro/out/kernel
+          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+
+      - name: Build OS-1 x86_64 kernel if cache miss (T1-KBUILD)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: ./distro/tools/os1.sh kernel
+
+      - name: Build OS-1 KDE/KWin Wayland desktop rootfs & disk image (T5-DESKTOP-BUILD)
+        run: sudo OS1_PROFILE=desktop OS1_DESKTOP_AUTOLOGIN=1 ./distro/tools/os1.sh rootfs
+
+      - name: Boot Wayland Desktop in QEMU, verify KWin/Plasma/Konsole & capture screenshot (T5-WAYLAND)
+        run: ./distro/tools/os1.sh wayland-test
+
+      - name: Upload Phase 5 verification artifacts & desktop screenshot (bounded 7-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-wayland-desktop-evidence
+          retention-days: 7
+          path: |
+            distro/out/images/rootfs-provenance.json
+            distro/out/screenshots/phase5-wayland-desktop.png
+            distro/out/logs/qemu-phase5-wayland.log

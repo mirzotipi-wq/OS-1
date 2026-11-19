@@ -35,7 +35,8 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
-            "${REPO_ROOT}/distro/tests/qemu-install-test.py"; do
+            "${REPO_ROOT}/distro/tests/qemu-install-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-wayland-test.py"; do
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
@@ -66,6 +67,9 @@ case "${cmd}" in
     install-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-install-test.py" "$@"
         ;;
+    wayland-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-wayland-test.py" "$@"
+        ;;
     clean)
         echo "[os1] Removing ephemeral build outputs: ${OUT_ROOT}"
         rm -rf "${OUT_ROOT}"
@@ -81,10 +85,12 @@ Commands:
   kernel          Build the OS-1 x86_64 kernel (--config-only, --with-modules, -j N)
   initramfs       Build the minimal bootable OS-1 userspace initramfs (Phase 1)
   boot-test       Boot OS-1 kernel + initramfs in QEMU and assert serial proof (Phase 1)
-  rootfs          Build pinned Debian stable rootfs + persistent ext4 disk image (Phase 2, root)
+  rootfs          Build pinned Debian stable rootfs + persistent ext4 disk image (Phase 2/5, root)
   userspace-test  Boot OS-1 kernel on persistent disk, login, network, APT, reboot test (Phase 2)
   iso             Build x86-64 UEFI bootable Live ISO with Recovery Mode (Phase 3, root)
   iso-test        Boot fresh UEFI Live ISO + Recovery Mode in QEMU/OVMF (Phase 3)
+  install-test    Boot UEFI Live ISO, install to blank disk, verify installed UEFI boot (Phase 4)
+  wayland-test    Boot OS-1 Wayland desktop in QEMU, verify KWin/Plasma & capture screenshot (Phase 5)
   clean           Remove generated build outputs in distro/out/
 EOF
         ;;
