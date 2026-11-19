@@ -89,6 +89,9 @@ DESKTOP_PACKAGES=(
     plasma-nm
     plasma-pa
     upower
+    power-profiles-daemon
+    ufw
+    orca
     konsole
     dolphin
     kio-extras
@@ -174,10 +177,10 @@ echo "[os1-rootfs] Configuring OS-1 system identity, networking, storage, locale
 
 # OS identity
 cat > "${ROOTFS_DIR}/etc/os-release" <<EOF
-PRETTY_NAME="OS-1 0.2-dev (Debian ${DEBIAN_SUITE} base)"
+PRETTY_NAME="OS-1 1.0-rc1 (Debian ${DEBIAN_SUITE} base)"
 NAME="OS-1"
-VERSION_ID="0.2"
-VERSION="0.2-dev (Phase 2)"
+VERSION_ID="1.0"
+VERSION="1.0-rc1 (Debian ${DEBIAN_SUITE} base)"
 ID=os1
 ID_LIKE=debian
 HOME_URL="https://github.com/mirzotipi-wq/OS-1"
@@ -354,6 +357,18 @@ fc-cache -f || true
     install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-accessibility" "${ROOTFS_DIR}/usr/local/bin/os1-accessibility"
     install -m 0755 "${REPO_ROOT}/distro/installer/os1-firstboot" "${ROOTFS_DIR}/usr/local/bin/os1-firstboot"
     install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${ROOTFS_DIR}/usr/local/bin/os1-fs-test"
+
+    # Phase 14 security baseline: UFW default-deny incoming / allow outgoing
+    if [[ -f "${ROOTFS_DIR}/etc/ufw/ufw.conf" ]]; then
+        sed -i 's/^ENABLED=.*/ENABLED=yes/' "${ROOTFS_DIR}/etc/ufw/ufw.conf"
+    fi
+    if [[ -f "${ROOTFS_DIR}/etc/default/ufw" ]]; then
+        sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "${ROOTFS_DIR}/etc/default/ufw"
+        sed -i 's/^DEFAULT_OUTPUT_POLICY=.*/DEFAULT_OUTPUT_POLICY="ACCEPT"/' "${ROOTFS_DIR}/etc/default/ufw"
+    fi
+    chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
+        systemctl enable ufw.service || true
+    "
 fi
 
 # Install OS-1 UEFI system installer into rootfs
