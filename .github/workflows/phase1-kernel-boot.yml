@@ -1,0 +1,77 @@
+name: Phase 1 - OS-1 Kernel Build & QEMU Serial Boot Proof
+
+on:
+  push:
+    branches:
+      - master
+      - 'os1/**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: phase1-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel-build-and-qemu-boot:
+    name: Build OS-1 x86_64 Kernel & Boot in QEMU
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space on runner if needed
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
+
+      - name: Install kernel build and QEMU boot dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            cpio \
+            kmod \
+            xz-utils \
+            busybox-static \
+            qemu-system-x86 \
+            file
+
+      - name: Run OS-1 repository audit (T0-AUDIT)
+        run: ./distro/tools/os1.sh audit
+
+      - name: Build OS-1 x86_64 kernel (T1-KBUILD)
+        run: ./distro/tools/os1.sh kernel
+
+      - name: Build minimal OS-1 userspace initramfs (T1-INITRAMFS)
+        run: ./distro/tools/os1.sh initramfs
+
+      - name: Boot OS-1 kernel in QEMU and verify serial proof (T1-QEMU-BOOT)
+        run: ./distro/tools/os1.sh boot-test
+
+      - name: Print provenance manifest
+        run: cat distro/out/kernel/provenance.json
+
+      - name: Upload Phase 1 verification artifacts (bounded 7-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-kernel-boot-evidence
+          retention-days: 7
+          path: |
+            distro/out/kernel/provenance.json
+            distro/out/kernel/os1_x86_64.config
+            distro/out/logs/qemu-serial.log
+            distro/out/logs/qemu-serial-clean.log
