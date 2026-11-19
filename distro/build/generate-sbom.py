@@ -85,6 +85,17 @@ def main() -> int:
         ["git", "-C", repo_root, "rev-parse", "HEAD"], text=True
     ).strip()
 
+    version_meta = {}
+    ver_file = os.path.join(repo_root, "distro", "VERSION")
+    if os.path.isfile(ver_file):
+        with open(ver_file, encoding="utf-8") as vf:
+            for line in vf:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                version_meta[k.strip()] = v.strip().strip('"').strip("'")
+
     sbom = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -94,11 +105,12 @@ def main() -> int:
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "component": {
                 "type": "operating-system",
-                "name": "OS-1",
-                "version": "1.0-rc1",
+                "name": version_meta.get("OS1_NAME", "OS-1"),
+                "version": version_meta.get("OS1_VERSION", "1.0-rc2"),
                 "properties": [
                     {"name": "os1:git_sha", "value": git_sha},
-                    {"name": "os1:debian_suite", "value": "bookworm"},
+                    {"name": "os1:debian_suite", "value": version_meta.get("OS1_DEBIAN_SUITE", "bookworm")},
+                    {"name": "os1:deb_version", "value": version_meta.get("OS1_DEB_VERSION", "1.0.0~rc2-1")},
                 ],
             },
         },

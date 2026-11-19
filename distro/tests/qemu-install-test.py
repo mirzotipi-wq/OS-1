@@ -226,7 +226,7 @@ def main() -> int:
 
             # Negative safety check 1: --password on argv must be rejected (rc=2)
             vm_iso.run_cmd(
-                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password forbidden",
+                "sudo -n /usr/sbin/os1-install --disk /dev/vda --user alice --password forbidden",
                 "NO_ARGV_PW",
                 timeout=30.0,
                 expect_rc="2",
@@ -236,7 +236,7 @@ def main() -> int:
             # Negative safety check 2: reserved username 'root' must be rejected (rc=2)
             vm_iso.run_cmd(
                 f"printf '%s' '{alice_pass_b64}' | base64 -d | "
-                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user root --password-stdin --dry-run",
+                "sudo -n /usr/sbin/os1-install --disk /dev/vda --user root --password-stdin --dry-run",
                 "NO_ROOT_USER",
                 timeout=30.0,
                 expect_rc="2",
@@ -246,7 +246,7 @@ def main() -> int:
             # Negative safety check 3: must refuse without --confirm-erase-disk (rc=3)
             out = vm_iso.run_cmd(
                 f"printf '%s' '{alice_pass_b64}' | base64 -d | "
-                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password-stdin",
+                "sudo -n /usr/sbin/os1-install --disk /dev/vda --user alice --password-stdin",
                 "DRYRUN",
                 timeout=30.0,
                 expect_rc="3",
@@ -258,7 +258,7 @@ def main() -> int:
             # Real destructive installation with explicit consent & special-char password via --password-stdin
             out = vm_iso.run_cmd(
                 f"printf '%s' '{alice_pass_b64}' | base64 -d | "
-                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password-stdin "
+                "sudo -n /usr/sbin/os1-install --disk /dev/vda --user alice --password-stdin "
                 "--hostname os1-installed --timezone America/Los_Angeles --confirm-erase-disk",
                 "INSTALL",
                 timeout=600.0,

@@ -378,7 +378,7 @@ def main() -> int:
                 "test -f /usr/share/color-schemes/OS1Light.colors && "
                 "test -f /usr/share/color-schemes/OS1Dark.colors && "
                 "test -f /usr/share/aurorae/themes/OS1Sequoia/OS1Sequoiarc && "
-                "test -x /usr/local/bin/os1-appearance && "
+                "test -x /usr/bin/os1-appearance && "
                 "grep -q 'org.kde.plasma.appmenu' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && "
                 "grep -q 'org.kde.plasma.icontasks' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && "
                 "grep -q 'org.kde.plasma.trash' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc",
@@ -422,9 +422,13 @@ def main() -> int:
             # Phase 10 & 12: Individually bounded steps with explicit user session DBus env
             vm.run_cmd(
                 "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-                "timeout 15 notify-send 'OS-1' 'Phase 10 Notification Center verified'",
+                "bash -c 'for i in $(seq 1 20); do "
+                "  timeout 3 qdbus org.freedesktop.Notifications /org/freedesktop/Notifications >/dev/null 2>&1 && break; "
+                "  sleep 1; "
+                "done; "
+                "timeout 15 notify-send \"OS-1\" \"Phase 10 Notification Center verified\"'",
                 "NOTIFY",
-                timeout=25.0,
+                timeout=45.0,
             )
             print("[PASS][FUNC] Phase 10 Notification Center DBus delivery verified", flush=True)
 

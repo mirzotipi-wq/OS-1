@@ -10,6 +10,8 @@ ROOTFS_DIR="${OUT_ROOT}/rootfs"
 IMAGE_DIR="${OUT_ROOT}/images"
 DISK_IMG="${IMAGE_DIR}/os1-rootfs.ext4.img"
 
+# shellcheck source=../VERSION
+source "${REPO_ROOT}/distro/VERSION"
 DEBIAN_SUITE="${OS1_DEBIAN_SUITE:-bookworm}"
 DEBIAN_MIRROR="${OS1_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
 OS1_PROFILE="${OS1_PROFILE:-minimal}"
@@ -176,21 +178,9 @@ else
     exit 1
 fi
 
-echo "[os1-rootfs] Configuring OS-1 system identity, networking, storage, locales, and user..."
+echo "[os1-rootfs] Configuring OS-1 hostname, networking, storage, locales, and user..."
 
-# OS identity
-cat > "${ROOTFS_DIR}/etc/os-release" <<EOF
-PRETTY_NAME="OS-1 1.0-rc1 (Debian ${DEBIAN_SUITE} base)"
-NAME="OS-1"
-VERSION_ID="1.0"
-VERSION="1.0-rc1 (Debian ${DEBIAN_SUITE} base)"
-ID=os1
-ID_LIKE=debian
-HOME_URL="https://github.com/mirzotipi-wq/OS-1"
-SUPPORT_URL="https://github.com/mirzotipi-wq/OS-1/issues"
-BUG_REPORT_URL="https://github.com/mirzotipi-wq/OS-1/issues"
-EOF
-
+# /etc/os-release is owned and installed by the native os1-release .deb package below.
 echo "os1" > "${ROOTFS_DIR}/etc/hostname"
 
 cat > "${ROOTFS_DIR}/etc/hosts" <<'EOF'
@@ -312,76 +302,67 @@ Relogin=false
 EOF
     fi
 
-    cat > "${ROOTFS_DIR}/etc/profile.d/10-os1-graphics.sh" <<'EOF'
-# OS-1 Wayland desktop session defaults
-export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
-export MOZ_ENABLE_WAYLAND=1
-export QT_AUTO_SCREEN_SCALE_FACTOR=1
-if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-    export LIBGL_ALWAYS_SOFTWARE=1
-    export GALLIUM_DRIVER=llvmpipe
-fi
-EOF
-    chmod 0644 "${ROOTFS_DIR}/etc/profile.d/10-os1-graphics.sh"
-
-    mkdir -p "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators"
-    cat > "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env" <<'EOF'
-#!/bin/sh
-# OS-1 GPU environment generator: enable Mesa llvmpipe fallback only when no 3D render node exists.
-echo "XDG_SESSION_TYPE=wayland"
-echo "MOZ_ENABLE_WAYLAND=1"
-echo "QT_AUTO_SCREEN_SCALE_FACTOR=1"
-if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-    echo "LIBGL_ALWAYS_SOFTWARE=1"
-    echo "GALLIUM_DRIVER=llvmpipe"
-fi
-EOF
-    chmod 0755 "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env"
-
     chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
 systemctl enable sddm.service
 systemctl set-default graphical.target
 fc-cache -f || true
 "
-
-    # Phase 6 & 7: Install original OS-1 visual identity, wallpapers, Aurorae theme, Look-and-Feel, and Top Bar + Dock shell layout
-    echo "[os1-rootfs] Installing OS-1 branding (Phase 6) and Top Menu Bar + Dock shell layout (Phase 7)..."
-    python3 "${REPO_ROOT}/distro/branding/generate-assets.py" "${ROOTFS_DIR}/usr/share"
-
-    mkdir -p "${ROOTFS_DIR}/usr/share/color-schemes"
-    install -m 0644 "${REPO_ROOT}/distro/branding/color-schemes/OS1Light.colors" "${ROOTFS_DIR}/usr/share/color-schemes/OS1Light.colors"
-    install -m 0644 "${REPO_ROOT}/distro/branding/color-schemes/OS1Dark.colors" "${ROOTFS_DIR}/usr/share/color-schemes/OS1Dark.colors"
-
-    mkdir -p "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts"
-    install -m 0644 "${REPO_ROOT}/distro/branding/look-and-feel/org.os1.desktop/metadata.json" \
-        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/metadata.json"
-    install -m 0644 "${REPO_ROOT}/distro/branding/look-and-feel/org.os1.desktop/contents/defaults" \
-        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/defaults"
-    install -m 0644 "${REPO_ROOT}/distro/shell/layout/org.kde.plasma.desktop-layout.js" \
-        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js"
-
-    mkdir -p "${ROOTFS_DIR}/etc/xdg/autostart" "${ROOTFS_DIR}/usr/share/os1" "${ROOTFS_DIR}/usr/local/bin"
-    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kdeglobals" "${ROOTFS_DIR}/etc/xdg/kdeglobals"
-    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kwinrc" "${ROOTFS_DIR}/etc/xdg/kwinrc"
-    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kglobalshortcutsrc" "${ROOTFS_DIR}/etc/xdg/kglobalshortcutsrc"
-    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/krunnerrc" "${ROOTFS_DIR}/etc/xdg/krunnerrc"
-    install -m 0644 "${REPO_ROOT}/distro/apps/dolphinrc" "${ROOTFS_DIR}/etc/xdg/dolphinrc"
-    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/autostart/os1-shell-firstboot.desktop" \
-        "${ROOTFS_DIR}/etc/xdg/autostart/os1-shell-firstboot.desktop"
-    install -m 0644 "${REPO_ROOT}/distro/branding/tokens.json" "${ROOTFS_DIR}/usr/share/os1/tokens.json"
-    install -m 0644 "${REPO_ROOT}/distro/apps/manifest.json" "${ROOTFS_DIR}/usr/share/os1/apps-manifest.json"
-    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-appearance" "${ROOTFS_DIR}/usr/local/bin/os1-appearance"
-    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-shell-init" "${ROOTFS_DIR}/usr/local/bin/os1-shell-init"
-    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-accessibility" "${ROOTFS_DIR}/usr/local/bin/os1-accessibility"
-    install -m 0755 "${REPO_ROOT}/distro/installer/os1-firstboot" "${ROOTFS_DIR}/usr/local/bin/os1-firstboot"
-    install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${ROOTFS_DIR}/usr/local/bin/os1-fs-test"
 fi
 
-# Install OS-1 UEFI system installer into rootfs
-if [[ -f "${REPO_ROOT}/distro/installer/os1-install" ]]; then
-    mkdir -p "${ROOTFS_DIR}/usr/local/sbin"
-    install -m 0755 "${REPO_ROOT}/distro/installer/os1-install" "${ROOTFS_DIR}/usr/local/sbin/os1-install"
+# Phase 19: Package-owned OS-1 system assembly (install native .debs instead of direct file copies)
+APT_REPO_DIR="${OS1_APT_REPO_DIR:-${OUT_ROOT}/apt-repo}"
+if [[ ! -f "${APT_REPO_DIR}/os1-release_${OS1_DEB_VERSION}_all.deb" ]]; then
+    echo "[os1-rootfs] Building native OS-1 .deb packages (${OS1_DEB_VERSION})..."
+    OS1_OUT_DIR="${OUT_ROOT}" "${REPO_ROOT}/distro/packages/build-debs.sh"
 fi
+
+echo "[os1-rootfs] Installing native OS-1 Debian packages into rootfs (profile=${OS1_PROFILE})..."
+mkdir -p "${ROOTFS_DIR}/tmp/os1-debs"
+cp -f "${APT_REPO_DIR}"/*.deb "${ROOTFS_DIR}/tmp/os1-debs/"
+
+if [[ "${OS1_PROFILE}" == "desktop" ]]; then
+    OS1_PKGS=(
+        os1-release
+        os1-keyring
+        os1-branding
+        os1-shell
+        os1-firstboot
+        os1-installer
+        os1-tools
+        os1-desktop-meta
+    )
+else
+    OS1_PKGS=(
+        os1-release
+        os1-keyring
+        os1-installer
+        os1-tools
+    )
+fi
+
+OS1_DEB_ARGS=()
+for pkg in "${OS1_PKGS[@]}"; do
+    for match in "${ROOTFS_DIR}/tmp/os1-debs/${pkg}_"*.deb; do
+        if [[ ! -f "${match}" ]]; then
+            echo "ERROR: Expected OS-1 package not found in ${APT_REPO_DIR}: ${pkg}" >&2
+            exit 1
+        fi
+        OS1_DEB_ARGS+=("/tmp/os1-debs/$(basename "${match}")")
+    done
+done
+
+chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
+    dpkg -i "${OS1_DEB_ARGS[@]}"
+
+echo "[os1-rootfs] Verifying OS-1 package database integrity (dpkg --audit & dpkg -V)..."
+AUDIT_OUT="$(chroot "${ROOTFS_DIR}" dpkg --audit)"
+if [[ -n "${AUDIT_OUT}" ]]; then
+    echo "ERROR: dpkg --audit reported broken packages:" >&2
+    echo "${AUDIT_OUT}" >&2
+    exit 1
+fi
+chroot "${ROOTFS_DIR}" dpkg -V "${OS1_PKGS[@]}"
+rm -rf "${ROOTFS_DIR}/tmp/os1-debs"
 
 # Clean apt caches to keep disk image compact
 rm -rf "${ROOTFS_DIR}/var/lib/apt/lists/"* "${ROOTFS_DIR}/var/cache/apt/archives/"*.deb
@@ -399,10 +380,12 @@ PKG_COUNT="$(wc -l < "${IMAGE_DIR}/rootfs-packages.tsv" | tr -d ' ')"
 GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 BUILD_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-python3 - "${IMAGE_DIR}/rootfs-provenance.json" <<PYEOF
+python3 - "${IMAGE_DIR}/rootfs-provenance.json" "${OS1_PKGS[@]}" <<PYEOF
 import json, sys
 data = {
     "project": "OS-1",
+    "os1_version": "${OS1_VERSION}",
+    "os1_deb_version": "${OS1_DEB_VERSION}",
     "phase": 5 if "${OS1_PROFILE}" == "desktop" else 2,
     "profile": "${OS1_PROFILE}",
     "debian_suite": "${DEBIAN_SUITE}",
@@ -411,6 +394,7 @@ data = {
     "git_sha": "${GIT_SHA}",
     "build_timestamp_utc": "${BUILD_UTC}",
     "package_count": int("${PKG_COUNT}"),
+    "os1_packages": sys.argv[2:],
     "disk_image": {
         "path": "distro/out/images/os1-rootfs.ext4.img",
         "size_mb": int("${IMAGE_SIZE_MB}"),
@@ -426,6 +410,9 @@ PYEOF
 
 if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
     chown -R "${SUDO_UID}:${SUDO_GID}" "${IMAGE_DIR}"
+    if [[ -d "${APT_REPO_DIR}" ]]; then
+        chown -R "${SUDO_UID}:${SUDO_GID}" "${APT_REPO_DIR}"
+    fi
 fi
 
 echo "[os1-rootfs] SUCCESS"

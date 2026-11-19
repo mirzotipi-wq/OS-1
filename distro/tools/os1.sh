@@ -42,6 +42,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
             "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
+            "${REPO_ROOT}/distro/tests/package-verify-test.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
@@ -55,6 +56,8 @@ case "${cmd}" in
         python3 "${REPO_ROOT}/distro/tests/ci-integrity-test.py"
         echo "Installer preflight & credential safety check:"
         python3 "${REPO_ROOT}/distro/tests/installer-safety-test.py"
+        echo "Native Debian package correctness check:"
+        python3 "${REPO_ROOT}/distro/tests/package-verify-test.py"
         echo "Disk space:"
         df -h "${REPO_ROOT}"
         ;;
@@ -90,6 +93,9 @@ case "${cmd}" in
         ;;
     debs)
         exec "${REPO_ROOT}/distro/packages/build-debs.sh" "$@"
+        ;;
+    pkg-verify)
+        exec python3 "${REPO_ROOT}/distro/tests/package-verify-test.py" "$@"
         ;;
     sbom)
         exec python3 "${REPO_ROOT}/distro/build/generate-sbom.py" "$@"

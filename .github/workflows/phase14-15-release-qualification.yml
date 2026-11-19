@@ -57,6 +57,7 @@ jobs:
             ovmf \
             qemu-system-x86 \
             dpkg-dev \
+            lintian \
             file
 
       - name: Run OS-1 repository audit (T0-AUDIT)
@@ -76,9 +77,10 @@ jobs:
       - name: Build native OS-1 .deb packages & local APT repository (T14-DEBS)
         run: ./distro/tools/os1.sh debs
 
-      - name: Build full OS-1 Wayland Desktop rootfs & UEFI Live ISO (T15-DESKTOP-ISO)
+      - name: Build full OS-1 Wayland Desktop rootfs & verify package lifecycle (T15-DESKTOP-ISO / T19-PKG)
         run: |
           sudo OS1_PROFILE=desktop OS1_DESKTOP_AUTOLOGIN=1 ./distro/tools/os1.sh rootfs
+          sudo ./distro/tools/os1.sh pkg-verify --repo-dir distro/out/apt-repo --lifecycle-rootfs distro/out/rootfs
           sudo ./distro/tools/os1.sh iso
 
       - name: Verify behavioral UFW/nftables firewall traffic blocking & reboot persistence (T17-FIREWALL)

@@ -5,6 +5,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# shellcheck source=../VERSION
+source "${REPO_ROOT}/distro/VERSION"
 OUT_ROOT="${OS1_OUT_DIR:-${REPO_ROOT}/distro/out}"
 KERNEL_IMG="${OUT_ROOT}/kernel/bzImage"
 KERNEL_PROV="${OUT_ROOT}/kernel/provenance.json"
@@ -118,6 +120,8 @@ python3 - "${ISO_DIR}/iso-provenance.json" <<PYEOF
 import json, sys
 data = {
     "project": "OS-1",
+    "os1_version": "${OS1_VERSION}",
+    "os1_deb_version": "${OS1_DEB_VERSION}",
     "phase": 3,
     "arch": "x86_64",
     "boot_mode": "UEFI",

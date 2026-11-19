@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=OS-1 Shell First-Login Initializer
-Exec=/usr/local/bin/os1-shell-init
+Exec=/usr/bin/os1-shell-init
 OnlyShowIn=KDE;
 X-KDE-autostart-phase=2
 NoDisplay=true
