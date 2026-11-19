@@ -114,7 +114,7 @@ class QemuSession:
         os.write(self.master_fd, (line + "\n").encode("utf-8"))
 
     def run_cmd(self, cmd: str, marker: str, timeout: float = 120.0) -> str:
-        self.sendline(f"{cmd}; echo {marker}_RC=$?")
+        self.sendline(f"{cmd}; printf '%s_RC=%d\\n' '{marker}' $?")
         out = self.expect(f"{marker}_RC=", timeout=timeout)
         rc_line = self.expect("\n", timeout=10.0).strip()
         if rc_line != "0":
