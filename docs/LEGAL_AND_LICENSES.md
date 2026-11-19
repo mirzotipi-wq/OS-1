@@ -27,5 +27,7 @@
 | KDE Plasma / KWin / Qt (Phase 5+) | GPL-2.0 / GPL-3.0 / LGPL-2.1 / LGPL-3.0 | Upstream KDE & Qt | Tracked via Debian package metadata |
 | `distro/branding/tokens.json`, `distro/branding/generate-assets.py` | `GPL-2.0-only` | Original OS-1 | Deterministic generator for `OS1Horizon` light/dark wallpapers, `os1-logo.svg`, and `OS1Sequoia` Aurorae SVG theme; zero Apple IP |
 | `distro/branding/color-schemes/OS1*.colors`, `distro/branding/look-and-feel/org.os1.desktop/` | `GPL-2.0-only` | Original OS-1 | Original Light & Dark Plasma color schemes and Look-and-Feel package |
-| `distro/shell/layout/`, `distro/shell/xdg/`, `distro/shell/bin/os1-appearance` | `GPL-2.0-only` | Original OS-1 | Original Top Menu Bar + Floating Bottom Dock Plasma layout and theme switcher |
+| `distro/shell/layout/`, `distro/shell/xdg/`, `distro/shell/bin/` | `GPL-2.0-only` | Original OS-1 | Original Top Menu Bar + Floating Bottom Dock Plasma layout, `os1-appearance`, `os1-shell-init`, `os1-accessibility` |
+| `distro/apps/`, `distro/installer/`, `distro/packages/`, `distro/build/generate-sbom.py` | `GPL-2.0-only` | Original OS-1 | Finder-class Dolphin defaults, 11-app manifest, `os1-install`, `os1-firstboot`, native `.deb` builder, CycloneDX 1.5 SBOM generator |
 | Fonts (`fonts-noto-core`, `fonts-noto-color-emoji`, `fonts-dejavu-core`, `fonts-liberation`) | `OFL-1.1` / `Bitstream Vera` | Upstream Debian / Google Noto / DejaVu / Red Hat | Legally redistributable open fonts; zero SF Pro / Apple fonts |
+| Security & Accessibility (`ufw`, `orca`, `power-profiles-daemon`, `upower`) | `GPL-3.0` / `LGPL-2.1` / `GPL-2.0` | Upstream Debian | Default firewall, screen reader, and power management tracked in CycloneDX SBOM |

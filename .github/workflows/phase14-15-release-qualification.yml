@@ -1,0 +1,118 @@
+name: Phases 14-15 - OS-1 Native Packaging, SBOM & Full Desktop ISO Release Qualification
+
+on:
+  push:
+    branches:
+      - master
+      - 'os1/**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: phase14-15-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase14-15-release-qualification:
+    name: Build Native .debs, Full Desktop UEFI Live ISO, SBOM & Clean-Install Qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space on runner
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
+
+      - name: Install build, packaging, ISO, and QEMU/OVMF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            cpio \
+            kmod \
+            xz-utils \
+            mmdebstrap \
+            debian-archive-keyring \
+            e2fsprogs \
+            squashfs-tools \
+            xorriso \
+            grub-efi-amd64-bin \
+            grub-common \
+            dosfstools \
+            mtools \
+            ovmf \
+            qemu-system-x86 \
+            dpkg-dev \
+            file
+
+      - name: Run OS-1 repository audit (T0-AUDIT)
+        run: ./distro/tools/os1.sh audit
+
+      - name: Restore cached OS-1 x86_64 kernel
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: distro/out/kernel
+          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+
+      - name: Build OS-1 x86_64 kernel if cache miss (T1-KBUILD)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: ./distro/tools/os1.sh kernel
+
+      - name: Build native OS-1 .deb packages & local APT repository (T14-DEBS)
+        run: ./distro/tools/os1.sh debs
+
+      - name: Build full OS-1 Wayland Desktop rootfs & UEFI Live ISO (T15-DESKTOP-ISO)
+        run: |
+          sudo OS1_PROFILE=desktop OS1_DESKTOP_AUTOLOGIN=1 ./distro/tools/os1.sh rootfs
+          sudo ./distro/tools/os1.sh iso
+
+      - name: Generate CycloneDX 1.5 SBOM & Release SHA256SUMS (T14-SBOM)
+        run: |
+          ./distro/tools/os1.sh sbom
+          mkdir -p distro/out/release
+          (cd distro/out && sha256sum \
+            iso/os1-live-x86_64.iso \
+            iso/iso-provenance.json \
+            images/rootfs-provenance.json \
+            apt-repo/*.deb \
+            apt-repo/Release \
+            release/os1-sbom.cdx.json \
+            > release/SHA256SUMS)
+          cat distro/out/release/SHA256SUMS
+
+      - name: Boot full Desktop UEFI Live ISO + Recovery Mode in QEMU/OVMF (T15-ISO-BOOT)
+        run: ./distro/tools/os1.sh iso-test
+
+      - name: Clean-install full Desktop ISO to 10 GiB disk, detach ISO & verify 2 reboots + UFW/Orca/fs (T15-DESKTOP-INSTALL)
+        run: OS1_INSTALL_DISK_GB=10 OS1_INSTALL_RAM=2048M ./distro/tools/os1.sh install-test
+
+      - name: Upload Phase 14-15 Release Qualification Evidence Bundle (7-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase14-15-release-qualification-evidence
+          retention-days: 7
+          path: |
+            distro/out/release/os1-sbom.cdx.json
+            distro/out/release/SHA256SUMS
+            distro/out/apt-repo/Release
+            distro/out/apt-repo/Packages
+            distro/out/apt-repo/SHA256SUMS
+            distro/out/iso/iso-provenance.json
+            distro/out/images/rootfs-provenance.json
+            distro/out/logs/*.log

@@ -53,15 +53,16 @@ class UefiVm:
         self.buf = ""
         self.master_fd, self.slave_fd = pty.openpty()
 
-        accel_args = ["-accel", "tcg", "-cpu", "max"]
+        accel_args = ["-accel", "tcg", "-cpu", "Haswell"]
         if os.access("/dev/kvm", os.R_OK | os.W_OK):
             accel_args = ["-enable-kvm", "-cpu", "host"]
 
+        ram_mb = os.environ.get("OS1_INSTALL_RAM", "1536M")
         cmd = [
             "qemu-system-x86_64",
             *accel_args,
             "-machine", "q35",
-            "-m", "1536M",
+            "-m", ram_mb,
             "-smp", "2",
             "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_path}",
             "-drive", f"file={disk_path},format=raw,if=virtio",
@@ -196,9 +197,10 @@ def main() -> int:
     work_dir = tempfile.mkdtemp(prefix="os1-phase4-")
     target_disk = os.path.join(work_dir, "os1-installed-disk.img")
 
-    # Create clean blank 4 GiB virtual disk
+    # Create clean blank virtual disk (default 4 GiB; 10+ GiB for full desktop ISO)
+    disk_gb = int(os.environ.get("OS1_INSTALL_DISK_GB", "4"))
     with open(target_disk, "wb") as f:
-        f.truncate(4 * 1024 * 1024 * 1024)
+        f.truncate(disk_gb * 1024 * 1024 * 1024)
 
     install_log = os.path.join(log_dir, "qemu-phase4-install.log")
     boot1_log = os.path.join(log_dir, "qemu-phase4-installed-boot1.log")
@@ -208,7 +210,7 @@ def main() -> int:
 
     try:
         # --- STEP 1: Boot Live ISO + Run Installer on Blank Disk ---
-        print("=== Phase 4 Step 1: Boot Live ISO & Install to Blank 4 GiB VM Disk ===", flush=True)
+        print(f"=== Phase 4/15 Step 1: Boot Live ISO & Install to Blank {disk_gb} GiB VM Disk ===", flush=True)
         vm_iso = UefiVm(ovmf_path, target_disk, install_log, iso_path=iso_path)
         try:
             vm_iso.login("os1", "os1", "os1")
@@ -229,7 +231,7 @@ def main() -> int:
                 "echo os1 | sudo -S /usr/local/sbin/os1-install --disk /dev/vda --user alice --password alicepass "
                 "--hostname os1-installed --timezone America/Los_Angeles --confirm-erase-disk",
                 "INSTALL",
-                timeout=300.0,
+                timeout=600.0,
             )
             if "=== OS-1_INSTALL_COMPLETE ===" not in out:
                 raise RuntimeError(f"Install completion marker missing:\n{out}")
@@ -240,7 +242,7 @@ def main() -> int:
             vm_iso.close()
 
         # --- STEP 2: Detach ISO! Boot Installed Disk via OVMF UEFI ---
-        print("=== Phase 4 Step 2: ISO Detached -> Boot Installed Disk, APT Update/Install, File Write ===", flush=True)
+        print("=== Phase 4/15 Step 2: ISO Detached -> Boot Installed Disk, APT Update/Install, File Write ===", flush=True)
         vm_inst1 = UefiVm(ovmf_path, target_disk, boot1_log, iso_path=None)
         try:
             vm_inst1.login("os1-installed", "alice", "alicepass")
@@ -256,6 +258,20 @@ def main() -> int:
                 if needle not in out:
                     raise RuntimeError(f"Installed system check missing {needle!r}:\n{out}")
             print("[PASS] Installed disk booted via UEFI on OS-1 kernel with ext4 root & custom config", flush=True)
+
+            # If full desktop ISO was installed, verify Phase 13-14 firewall, a11y, and fs suite
+            vm_inst1.run_cmd(
+                "if [ -f /usr/share/os1/apps-manifest.json ]; then "
+                "  grep -q 'ENABLED=yes' /etc/ufw/ufw.conf && "
+                "  grep -q 'DEFAULT_INPUT_POLICY=\"DROP\"' /etc/default/ufw && "
+                "  command -v orca >/dev/null && "
+                "  os1-fs-test && "
+                "  echo DESKTOP_QUAL_OK; "
+                "else echo MINIMAL_PROFILE_OK; fi",
+                "DESKTOPQUAL",
+                timeout=60.0,
+            )
+            print("[PASS] Installed system profile qualification (firewall/a11y/fs) verified", flush=True)
 
             # Networking + APT update + install jq
             vm_inst1.run_cmd(

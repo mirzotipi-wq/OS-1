@@ -24,6 +24,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-live-initramfs.sh" \
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
             "${REPO_ROOT}/distro/build/build-iso.sh" \
+            "${REPO_ROOT}/distro/packages/build-debs.sh" \
             "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/installer/os1-firstboot" \
             "${REPO_ROOT}/distro/shell/bin/os1-appearance" \
@@ -38,6 +39,7 @@ case "${cmd}" in
         for f in \
             "${REPO_ROOT}/distro/branding/generate-assets.py" \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
+            "${REPO_ROOT}/distro/build/generate-sbom.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
@@ -76,6 +78,12 @@ case "${cmd}" in
     wayland-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-wayland-test.py" "$@"
         ;;
+    debs)
+        exec "${REPO_ROOT}/distro/packages/build-debs.sh" "$@"
+        ;;
+    sbom)
+        exec python3 "${REPO_ROOT}/distro/build/generate-sbom.py" "$@"
+        ;;
     clean)
         echo "[os1] Removing ephemeral build outputs: ${OUT_ROOT}"
         rm -rf "${OUT_ROOT}"
@@ -95,8 +103,10 @@ Commands:
   userspace-test  Boot OS-1 kernel on persistent disk, login, network, APT, reboot test (Phase 2)
   iso             Build x86-64 UEFI bootable Live ISO with Recovery Mode (Phase 3, root)
   iso-test        Boot fresh UEFI Live ISO + Recovery Mode in QEMU/OVMF (Phase 3)
-  install-test    Boot UEFI Live ISO, install to blank disk, verify installed UEFI boot (Phase 4)
-  wayland-test    Boot OS-1 Wayland desktop in QEMU, verify KWin/Plasma & capture screenshot (Phase 5)
+  install-test    Boot UEFI Live ISO, install to blank disk, verify installed UEFI boot (Phase 4/15)
+  wayland-test    Boot OS-1 Wayland desktop in QEMU, verify KWin/Plasma & capture screenshot (Phase 5-12)
+  debs            Build native OS-1 .deb packages and local APT repository (Phase 14)
+  sbom            Generate CycloneDX 1.5 JSON SBOM for current build outputs (Phase 14)
   clean           Remove generated build outputs in distro/out/
 EOF
         ;;
