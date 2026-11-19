@@ -24,6 +24,7 @@ import select
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -162,7 +163,8 @@ def main() -> int:
     out_root = os.environ.get("OS1_OUT_DIR", os.path.join(repo_root, "distro", "out"))
     kernel_path = os.path.join(out_root, "kernel", "bzImage")
     src_disk = os.path.join(out_root, "images", "os1-rootfs.ext4.img")
-    work_disk = os.path.join(out_root, "images", "os1-phase2-test-disk.img")
+    work_dir = tempfile.mkdtemp(prefix="os1-phase2-")
+    work_disk = os.path.join(work_dir, "os1-phase2-test-disk.img")
     log_dir = os.path.join(out_root, "logs")
     os.makedirs(log_dir, exist_ok=True)
 
@@ -250,7 +252,7 @@ def main() -> int:
             print(f"ERROR: Kernel panic or Oops detected in {lp}", file=sys.stderr)
             return 1
 
-    os.remove(work_disk)
+    shutil.rmtree(work_dir, ignore_errors=True)
     print("[os1-phase2-test] ALL PHASE 2 USERSPACE & PERSISTENCE ASSERTIONS PASSED.", flush=True)
     return 0
 

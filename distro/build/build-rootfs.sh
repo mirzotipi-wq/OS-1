@@ -227,6 +227,10 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     f.write("\n")
 PYEOF
 
+if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
+    chown -R "${SUDO_UID}:${SUDO_GID}" "${IMAGE_DIR}"
+fi
+
 echo "[os1-rootfs] SUCCESS"
 echo "[os1-rootfs]   Image:    ${DISK_IMG} (${IMAGE_SIZE_MB} MiB, ${PKG_COUNT} packages)"
 echo "[os1-rootfs]   SHA-256:  ${IMG_SHA256}"
