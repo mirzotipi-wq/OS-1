@@ -321,8 +321,13 @@ def main() -> int:
             )
             print("[PASS] Core apps (konsole, dolphin, firefox-esr) verified & konsole launched on Wayland", flush=True)
 
-            # Verify Phase 6 branding assets & Phase 7 Top Menu Bar + Floating Dock shell layout
+            # Wait for first-login os1-shell-init and verify Phase 6 branding & Phase 7 Top Menu Bar + Floating Dock
             vm.run_cmd(
+                "for i in $(seq 1 45); do "
+                "  test -f /home/os1/.config/.os1-shell-initialized && "
+                "  test -f /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && break; "
+                "  sleep 2; "
+                "done; "
                 "test -f /usr/share/os1/tokens.json && "
                 "test -f /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png && "
                 "test -f /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080-dark.png && "
@@ -334,7 +339,7 @@ def main() -> int:
                 "grep -q 'org.kde.plasma.icontasks' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && "
                 "grep -q 'org.kde.plasma.trash' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc",
                 "SHELL_LAYOUT",
-                timeout=30.0,
+                timeout=120.0,
             )
             print("[PASS] Phase 6 OS-1 branding & Phase 7 Top Menu Bar + Floating Dock layout verified", flush=True)
 

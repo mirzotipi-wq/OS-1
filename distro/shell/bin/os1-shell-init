@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# First-login initializer for the OS-1 Plasma Wayland desktop shell (Phases 6 & 7).
+set -euo pipefail
+
+STAMP="${XDG_CONFIG_HOME:-$HOME/.config}/.os1-shell-initialized"
+if [[ -f "${STAMP}" ]]; then
+    exit 0
+fi
+
+mkdir -p "$(dirname "${STAMP}")"
+
+# Wait briefly for plasmashell DBus service to be ready
+for _ in $(seq 1 30); do
+    if qdbus org.kde.plasmashell /PlasmaShell >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+
+plasma-apply-lookandfeel -a org.os1.desktop --resetLayout || true
+plasma-apply-colorscheme OS1Light || true
+plasma-apply-wallpaperimage /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png || true
+qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+
+touch "${STAMP}"

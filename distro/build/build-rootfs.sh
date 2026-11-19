@@ -337,11 +337,14 @@ fc-cache -f || true
     install -m 0644 "${REPO_ROOT}/distro/shell/layout/org.kde.plasma.desktop-layout.js" \
         "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js"
 
-    mkdir -p "${ROOTFS_DIR}/etc/xdg" "${ROOTFS_DIR}/usr/share/os1" "${ROOTFS_DIR}/usr/local/bin"
+    mkdir -p "${ROOTFS_DIR}/etc/xdg/autostart" "${ROOTFS_DIR}/usr/share/os1" "${ROOTFS_DIR}/usr/local/bin"
     install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kdeglobals" "${ROOTFS_DIR}/etc/xdg/kdeglobals"
     install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kwinrc" "${ROOTFS_DIR}/etc/xdg/kwinrc"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/autostart/os1-shell-firstboot.desktop" \
+        "${ROOTFS_DIR}/etc/xdg/autostart/os1-shell-firstboot.desktop"
     install -m 0644 "${REPO_ROOT}/distro/branding/tokens.json" "${ROOTFS_DIR}/usr/share/os1/tokens.json"
     install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-appearance" "${ROOTFS_DIR}/usr/local/bin/os1-appearance"
+    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-shell-init" "${ROOTFS_DIR}/usr/local/bin/os1-shell-init"
 fi
 
 # Install OS-1 UEFI system installer into rootfs
