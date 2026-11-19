@@ -259,9 +259,12 @@ def main() -> int:
                     raise RuntimeError(f"Installed system check missing {needle!r}:\n{out}")
             print("[PASS] Installed disk booted via UEFI on OS-1 kernel with ext4 root & custom config", flush=True)
 
-            # If full desktop ISO was installed, verify Phase 13-14 firewall, a11y, and fs suite
+            # If full desktop ISO was installed, log runtime service health and verify static/fs checks honestly
             vm_inst1.run_cmd(
                 "if [ -f /usr/share/os1/apps-manifest.json ]; then "
+                "  echo '=== SYSTEMD FAILED UNITS (DIAGNOSTIC) ==='; "
+                "  systemctl --failed --no-pager || true; "
+                "  echo \"UFW_SERVICE_STATE=$(systemctl is-active ufw.service 2>&1 || true)\"; "
                 "  grep -q 'ENABLED=yes' /etc/ufw/ufw.conf && "
                 "  grep -q 'DEFAULT_INPUT_POLICY=\"DROP\"' /etc/default/ufw && "
                 "  command -v orca >/dev/null && "
@@ -271,7 +274,7 @@ def main() -> int:
                 "DESKTOPQUAL",
                 timeout=60.0,
             )
-            print("[PASS] Installed system profile qualification (firewall/a11y/fs) verified", flush=True)
+            print("[PASS][STATIC+FUNC] Desktop profile static UFW/Orca presence & os1-fs-test passed (runtime UFW gate enforced in Phase 17)", flush=True)
 
             # Networking + APT update + install jq
             vm_inst1.run_cmd(

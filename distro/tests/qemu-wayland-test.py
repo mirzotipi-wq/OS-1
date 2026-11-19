@@ -207,11 +207,55 @@ class DesktopVm:
         if self.proc.returncode != 0:
             raise RuntimeError(f"QEMU exited with rc={self.proc.returncode}")
 
+    def collect_diagnostics(self, diag_path: str, ppm_path: str, fail_png_path: str) -> None:
+        """Best-effort capture of systemd, journal, DBus, process, and framebuffer state on failure."""
+        print(f"[os1-phase5-test] Capturing failure diagnostics to {diag_path}...", flush=True)
+        try:
+            self.monitor_cmd(f"screendump {ppm_path}")
+            if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) >= 1000:
+                ppm_to_png_and_check_nonblack(ppm_path, fail_png_path)
+                print(f"[os1-phase5-test] Captured failure screenshot: {fail_png_path}", flush=True)
+        except Exception as exc:
+            print(f"[os1-phase5-test] Could not capture failure screenshot: {exc}", flush=True)
+
+        if self.proc.poll() is not None:
+            return
+
+        diag_cmd = (
+            "echo '=== SYSTEMD FAILED ==='; systemctl --failed --no-pager; "
+            "echo '=== SDDM STATUS ==='; systemctl status sddm.service --no-pager; "
+            "echo '=== SESSIONS ==='; loginctl list-sessions --no-pager; "
+            "echo '=== RUNTIME DIR ==='; ls -la /run/user/1000 /dev/dri; "
+            "echo '=== PROCESSES ==='; ps -eo pid,ppid,stat,comm,args; "
+            "echo '=== SDDM JOURNAL ==='; journalctl -u sddm.service -n 60 --no-pager; "
+            "echo '=== USER PLASMA/KWIN JOURNAL ==='; "
+            "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+            "journalctl --user -u plasma-kwin_wayland.service -u plasma-plasmashell.service -n 80 --no-pager; "
+            "echo '=== OS1 SHELL INIT LOG ==='; cat /home/os1/.local/share/os1-shell-init.log 2>/dev/null; "
+            "echo '=== SYSTEM ERRORS ==='; journalctl -b -p err..emerg -n 60 --no-pager"
+        )
+        try:
+            # Send Ctrl-C first in case a prior command is hung on the serial PTY
+            os.write(self.master_fd, b"\x03\n")
+            time.sleep(0.5)
+            self._drain(0.5)
+            self.sendline(f"({diag_cmd}) 2>&1; echo '__OS1_DIAG_DONE__'")
+            out = self.expect("__OS1_DIAG_DONE__", timeout=25.0)
+            with open(diag_path, "w", encoding="utf-8") as f:
+                f.write(out)
+        except Exception as exc:
+            with open(diag_path, "w", encoding="utf-8") as f:
+                f.write(f"Diagnostics collection incomplete: {exc}\n\nBuffered serial tail:\n{self.buf[-8000:]}\n")
+
     def close(self) -> None:
         try:
             if self.proc.poll() is None:
-                self.proc.kill()
-                self.proc.wait(timeout=5)
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+                    self.proc.wait(timeout=5)
         finally:
             try:
                 os.close(self.master_fd)
@@ -343,9 +387,22 @@ def main() -> int:
             )
             print("[PASS] Phase 6 OS-1 branding & Phase 7 Top Menu Bar + Floating Dock layout verified", flush=True)
 
+            # Verify kwin_wayland + wayland-0 socket remain alive after os1-shell-init (detect compositor crash)
+            vm.run_cmd(
+                "for i in $(seq 1 20); do "
+                "  pgrep -x kwin_wayland >/dev/null 2>&1 && test -S /run/user/1000/wayland-0 && break; "
+                "  sleep 1; "
+                "done; "
+                "pgrep -a kwin_wayland && test -S /run/user/1000/wayland-0 && "
+                "pgrep -a plasmashell",
+                "COMPOSITOR_ALIVE",
+                timeout=30.0,
+            )
+            print("[PASS][PROCESS] kwin_wayland and plasmashell remain alive after os1-shell-init", flush=True)
+
             # Phase 8: Automated Finder-class filesystem operations suite inside live OS-1 VM
             vm.run_cmd("os1-fs-test", "FS_TEST", timeout=60.0)
-            print("[PASS] Phase 8 automated filesystem suite (copy/move/Trash+restore/symlinks/Unicode/16MiB/EACCES) passed", flush=True)
+            print("[PASS][FUNC] Phase 8 automated filesystem suite (copy/move/Trash+restore/symlinks/Unicode/16MiB/EACCES) passed", flush=True)
 
             # Phase 9 & 11: Verify Spotlight/Overview shortcuts and all 11 essential native apps from manifest
             vm.run_cmd(
@@ -360,21 +417,35 @@ def main() -> int:
                 "APPS_MANIFEST",
                 timeout=30.0,
             )
-            print("[PASS] Phase 9 Spotlight/Overview shortcuts & Phase 11 native apps manifest (11/11) verified", flush=True)
+            print("[PASS][STATIC] Phase 9 shortcut configs & Phase 11 native app binaries (11/11) present", flush=True)
 
-            # Phase 10 & 12: Verify Notification Center, NetworkManager/UPower, accessibility toggles & onboarding
+            # Phase 10 & 12: Individually bounded steps with explicit user session DBus env
             vm.run_cmd(
                 "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-                "notify-send 'OS-1' 'Phase 10 Notification Center verified' && "
-                "nmcli general status >/dev/null && "
-                "upower -e >/dev/null && "
+                "timeout 15 notify-send 'OS-1' 'Phase 10 Notification Center verified'",
+                "NOTIFY",
+                timeout=25.0,
+            )
+            print("[PASS][FUNC] Phase 10 Notification Center DBus delivery verified", flush=True)
+
+            vm.run_cmd(
+                "timeout 15 nmcli general status >/dev/null && timeout 15 upower -e >/dev/null",
+                "NM_UPOWER",
+                timeout=25.0,
+            )
+            print("[PASS][FUNC] NetworkManager (nmcli) & UPower (upower) runtime queries verified", flush=True)
+
+            vm.run_cmd(
+                "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
                 "os1-accessibility reduced-motion on && "
                 "os1-accessibility status | grep -q 'AnimationDurationFactor=0' && "
-                "os1-accessibility reduced-motion off",
-                "CONTROLS_A11Y",
+                "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+                "os1-accessibility reduced-motion off && "
+                "os1-accessibility status | grep -q 'AnimationDurationFactor=1'",
+                "A11Y_MOTION",
                 timeout=30.0,
             )
-            print("[PASS] Phase 10 Notifications/Controls & Phase 12 Accessibility reduced-motion verified", flush=True)
+            print("[PASS][FUNC] Phase 12 Accessibility reduced-motion toggle & state roundtrip verified", flush=True)
 
             # Allow panels & Dock pinned launchers to finish painting on TCG, then capture Light screenshot
             time.sleep(10.0)
@@ -395,7 +466,7 @@ def main() -> int:
                 raise RuntimeError(f"QEMU screendump failed or empty at {ppm_path}")
             if ratio < 0.20:
                 raise RuntimeError(f"Light desktop screenshot under-rendered (non-black={ratio:.2%}, expected >= 20%)")
-            print(f"[PASS] Captured OS-1 Light desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
+            print(f"[PASS][FUNC] Captured OS-1 Light desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
 
             # Phase 10 onboarding + Dark appearance live switch & Dark screenshot
             dark_png_path = os.path.join(shot_dir, "phase6-7-os1-dark-desktop.png")
@@ -412,12 +483,17 @@ def main() -> int:
             time.sleep(3.0)
             vm.monitor_cmd(f"screendump {ppm_path}")
             dw, dh, dratio = ppm_to_png_and_check_nonblack(ppm_path, dark_png_path)
-            print(f"[PASS] Captured OS-1 Dark desktop screenshot: {dark_png_path} ({dw}x{dh}, non-black={dratio:.1%})", flush=True)
+            print(f"[PASS][FUNC] Captured OS-1 Dark desktop screenshot: {dark_png_path} ({dw}x{dh}, non-black={dratio:.1%})", flush=True)
             if dratio < 0.10:
                 raise RuntimeError(f"Dark desktop screenshot appears blank (non-black={dratio:.2%})")
 
             vm.poweroff_and_wait("os1")
-            print("[PASS] Desktop session clean poweroff completed", flush=True)
+            print("[PASS][FUNC] Desktop session clean poweroff completed", flush=True)
+        except Exception:
+            diag_log = os.path.join(log_dir, "qemu-phase5-diagnostics.log")
+            fail_png = os.path.join(shot_dir, "phase5-failure-screenshot.png")
+            vm.collect_diagnostics(diag_log, ppm_path, fail_png)
+            raise
         finally:
             vm.close()
 

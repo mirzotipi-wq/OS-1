@@ -40,6 +40,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/branding/generate-assets.py" \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/build/generate-sbom.py" \
+            "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
@@ -48,6 +49,8 @@ case "${cmd}" in
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
+        echo "CI workflow integrity check:"
+        python3 "${REPO_ROOT}/distro/tests/ci-integrity-test.py"
         echo "Disk space:"
         df -h "${REPO_ROOT}"
         ;;

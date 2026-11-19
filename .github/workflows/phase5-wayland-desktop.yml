@@ -80,4 +80,4 @@ jobs:
           path: |
             distro/out/images/rootfs-provenance.json
             distro/out/screenshots/*.png
-            distro/out/logs/qemu-phase5-wayland.log
+            distro/out/logs/*.log

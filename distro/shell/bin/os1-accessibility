@@ -6,15 +6,30 @@ set -euo pipefail
 cmd="${1:-status}"
 val="${2:-}"
 
+notify_kwin_reconfigure() {
+    local uid bus_path
+    uid="$(id -u)"
+    bus_path="/run/user/${uid}/bus"
+    if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/${uid}" ]]; then
+        export XDG_RUNTIME_DIR="/run/user/${uid}"
+    fi
+    if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${bus_path}" ]]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_path}"
+    fi
+    if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] && command -v qdbus >/dev/null 2>&1; then
+        timeout 5 qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+    fi
+}
+
 case "${cmd}" in
     reduced-motion)
         if [[ "${val}" == "on" ]]; then
             kwriteconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor 0
-            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            notify_kwin_reconfigure
             echo "[os1-accessibility] reduced-motion=on (AnimationDurationFactor=0)"
         elif [[ "${val}" == "off" ]]; then
             kwriteconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor 1
-            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            notify_kwin_reconfigure
             echo "[os1-accessibility] reduced-motion=off (AnimationDurationFactor=1)"
         else
             echo "Usage: os1-accessibility reduced-motion <on|off>" >&2
@@ -25,12 +40,12 @@ case "${cmd}" in
         if [[ "${val}" == "on" ]]; then
             kwriteconfig5 --file kwinrc --group Plugins --key blurEnabled false
             kwriteconfig5 --file kwinrc --group Plugins --key contrastEnabled false
-            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            notify_kwin_reconfigure
             echo "[os1-accessibility] reduced-transparency=on (blurEnabled=false)"
         elif [[ "${val}" == "off" ]]; then
             kwriteconfig5 --file kwinrc --group Plugins --key blurEnabled true
             kwriteconfig5 --file kwinrc --group Plugins --key contrastEnabled true
-            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            notify_kwin_reconfigure
             echo "[os1-accessibility] reduced-transparency=off (blurEnabled=true)"
         else
             echo "Usage: os1-accessibility reduced-transparency <on|off>" >&2
