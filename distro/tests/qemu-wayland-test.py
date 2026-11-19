@@ -291,7 +291,9 @@ def main() -> int:
 
             # Verify core apps installed & launch Konsole in the Wayland session
             vm.run_cmd(
-                "konsole --version && dolphin --version && firefox-esr --version",
+                "QT_QPA_PLATFORM=offscreen konsole --version && "
+                "QT_QPA_PLATFORM=offscreen dolphin --version && "
+                "firefox-esr --version",
                 "APPS",
                 timeout=60.0,
             )
@@ -299,7 +301,7 @@ def main() -> int:
                 "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 "
                 "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus QT_QPA_PLATFORM=wayland "
                 "nohup konsole >/dev/null 2>&1 & "
-                "sleep 6; pgrep -a konsole",
+                "sleep 8; pgrep -a konsole",
                 "KONSOLE",
                 timeout=30.0,
             )
