@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // OS-1 Desktop Shell Layout (Phase 7): macOS Sequoia-style Top Menu Bar + Floating Bottom Dock
+// Compatible with KDE Plasma 5.27 (Debian 12 bookworm).
+
+// 0. Remove any pre-existing default panels so only OS-1 Top Bar & Dock exist
+var existingPanels = panels();
+for (var p = 0; p < existingPanels.length; p++) {
+    existingPanels[p].remove();
+}
 
 // 1. Configure OS-1 Horizon Wallpaper on all desktop containments
 var allDesktops = desktops();
@@ -8,7 +15,7 @@ for (var i = 0; i < allDesktops.length; i++) {
     d.wallpaperPlugin = "org.kde.image";
     d.currentConfigGroup = ["Wallpaper", "org.kde.image", "General"];
     d.writeConfig("Image", "file:///usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png");
-    d.writeConfig("FillMode", 2); // Scaled and Cropped
+    d.writeConfig("FillMode", 2);
 }
 
 // 2. Top Menu Bar (28px translucent bar: OS-1 menu, Global App Menu, spacer, System Tray, Clock)
@@ -39,7 +46,8 @@ var dock = new Panel;
 dock.location = "bottom";
 dock.height = 56;
 dock.alignment = "center";
-dock.lengthMode = "fit";
+dock.minimumLength = 420;
+dock.maximumLength = 860;
 dock.floating = true;
 dock.hiding = "none";
 
