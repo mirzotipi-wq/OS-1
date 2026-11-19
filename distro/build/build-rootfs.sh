@@ -12,14 +12,22 @@ DISK_IMG="${IMAGE_DIR}/os1-rootfs.ext4.img"
 
 DEBIAN_SUITE="${OS1_DEBIAN_SUITE:-bookworm}"
 DEBIAN_MIRROR="${OS1_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
-IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-2048}"
+OS1_PROFILE="${OS1_PROFILE:-minimal}"
+if [[ "${OS1_PROFILE}" == "desktop" ]]; then
+    IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-6144}"
+else
+    IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-2048}"
+fi
 DEV_USER="${OS1_DEV_USER:-os1}"
 DEV_PASS="${OS1_DEV_PASS:-os1}"
+DESKTOP_AUTOLOGIN="${OS1_DESKTOP_AUTOLOGIN:-0}"
 
 PACKAGES=(
     systemd
     systemd-sysv
+    libpam-systemd
     dbus
+    dbus-user-session
     udev
     sudo
     locales
@@ -50,6 +58,57 @@ PACKAGES=(
     passwd
 )
 
+DESKTOP_PACKAGES=(
+    plasma-desktop
+    plasma-workspace-wayland
+    kwin-wayland
+    sddm
+    breeze
+    breeze-icon-theme
+    qml-module-org-kde-qqc2desktopstyle
+    qtwayland5
+    xkb-data
+    xwayland
+    xserver-xorg-core
+    xserver-xorg-input-libinput
+    xserver-xorg-video-fbdev
+    libgl1
+    libegl1
+    libgles2
+    libgl1-mesa-dri
+    mesa-vulkan-drivers
+    libegl-mesa0
+    libgbm1
+    pipewire-pulse
+    pipewire-alsa
+    xdg-desktop-portal-kde
+    polkit-kde-agent-1
+    kscreen
+    plasma-nm
+    plasma-pa
+    upower
+    konsole
+    dolphin
+    firefox-esr
+    kate
+    gwenview
+    okular
+    kcalc
+    ark
+    kde-spectacle
+    plasma-systemmonitor
+    fonts-noto-core
+    fonts-noto-color-emoji
+    fonts-dejavu-core
+    fonts-liberation
+    fontconfig
+    dbus-x11
+)
+
+if [[ "${OS1_PROFILE}" == "desktop" ]]; then
+    PACKAGES+=("${DESKTOP_PACKAGES[@]}")
+fi
+
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "ERROR: build-rootfs.sh must run as root (e.g. via sudo) to preserve rootfs ownership and chroot." >&2
     exit 1
@@ -68,7 +127,11 @@ check_disk_space_mb() {
     echo "[os1-rootfs] Disk preflight OK: ${avail_mb} MiB available (need >= ${required_mb} MiB)"
 }
 
-check_disk_space_mb "${OUT_ROOT}" 4096
+if [[ "${OS1_PROFILE}" == "desktop" ]]; then
+    check_disk_space_mb "${OUT_ROOT}" 8192
+else
+    check_disk_space_mb "${OUT_ROOT}" 4096
+fi
 
 if ! command -v mkfs.ext4 >/dev/null 2>&1; then
     echo "ERROR: mkfs.ext4 (e2fsprogs) not found." >&2
@@ -189,6 +252,74 @@ cat > "${ROOTFS_DIR}/etc/sudoers.d/10-os1-sudo" <<'EOF'
 EOF
 chmod 0440 "${ROOTFS_DIR}/etc/sudoers.d/10-os1-sudo"
 
+# Desktop Wayland session configuration (Phase 5+)
+if [[ "${OS1_PROFILE}" == "desktop" ]]; then
+    echo "[os1-rootfs] Configuring KDE Plasma / KWin Wayland session and SDDM..."
+    mkdir -p "${ROOTFS_DIR}/etc/sddm.conf.d" "${ROOTFS_DIR}/etc/profile.d"
+
+    WAYLAND_SESSION="plasmawayland.desktop"
+    if [[ -f "${ROOTFS_DIR}/usr/share/wayland-sessions/plasmawayland.desktop" ]]; then
+        WAYLAND_SESSION="plasmawayland.desktop"
+    elif [[ -f "${ROOTFS_DIR}/usr/share/wayland-sessions/plasma.desktop" ]]; then
+        WAYLAND_SESSION="plasma.desktop"
+    fi
+
+    cat > "${ROOTFS_DIR}/etc/sddm.conf.d/10-os1-wayland.conf" <<EOF
+[General]
+InputMethod=
+Numlock=none
+
+[Wayland]
+SessionDir=/usr/share/wayland-sessions
+EnableHiDPI=true
+
+[X11]
+EnableHiDPI=true
+EOF
+
+    if [[ "${DESKTOP_AUTOLOGIN}" == "1" ]]; then
+        cat >> "${ROOTFS_DIR}/etc/sddm.conf.d/10-os1-wayland.conf" <<EOF
+
+[Autologin]
+User=${DEV_USER}
+Session=${WAYLAND_SESSION}
+Relogin=false
+EOF
+    fi
+
+    cat > "${ROOTFS_DIR}/etc/profile.d/10-os1-graphics.sh" <<'EOF'
+# OS-1 Wayland desktop session defaults
+export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+export MOZ_ENABLE_WAYLAND=1
+export QT_AUTO_SCREEN_SCALE_FACTOR=1
+if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export GALLIUM_DRIVER=llvmpipe
+fi
+EOF
+    chmod 0644 "${ROOTFS_DIR}/etc/profile.d/10-os1-graphics.sh"
+
+    mkdir -p "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators"
+    cat > "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env" <<'EOF'
+#!/bin/sh
+# OS-1 GPU environment generator: enable Mesa llvmpipe fallback only when no 3D render node exists.
+echo "XDG_SESSION_TYPE=wayland"
+echo "MOZ_ENABLE_WAYLAND=1"
+echo "QT_AUTO_SCREEN_SCALE_FACTOR=1"
+if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+    echo "LIBGL_ALWAYS_SOFTWARE=1"
+    echo "GALLIUM_DRIVER=llvmpipe"
+fi
+EOF
+    chmod 0755 "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env"
+
+    chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
+systemctl enable sddm.service
+systemctl set-default graphical.target
+fc-cache -f || true
+"
+fi
+
 # Install OS-1 UEFI system installer into rootfs
 if [[ -f "${REPO_ROOT}/distro/installer/os1-install" ]]; then
     mkdir -p "${ROOTFS_DIR}/usr/local/sbin"
@@ -215,7 +346,8 @@ python3 - "${IMAGE_DIR}/rootfs-provenance.json" <<PYEOF
 import json, sys
 data = {
     "project": "OS-1",
-    "phase": 2,
+    "phase": 5 if "${OS1_PROFILE}" == "desktop" else 2,
+    "profile": "${OS1_PROFILE}",
     "debian_suite": "${DEBIAN_SUITE}",
     "debian_mirror": "${DEBIAN_MIRROR}",
     "arch": "amd64",
