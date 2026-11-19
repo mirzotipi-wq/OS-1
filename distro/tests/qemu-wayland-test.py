@@ -289,7 +289,7 @@ def main() -> int:
                 "pid=$(pgrep -x plasmashell | head -n1); "
                 "if [ -z \"$pid\" ] || ps -o stat= -p \"$pid\" | grep -q Z; then "
                 "  echo '=== PLASMA DIAGNOSTICS ==='; "
-                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus journalctl --user -b -n 50 --no-pager || true; "
+                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus journalctl --user -u plasma-kwin_wayland.service -u plasma-plasmashell.service -n 50 --no-pager || true; "
                 "  exit 1; "
                 "fi",
                 "PLASMA",
