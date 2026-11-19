@@ -83,7 +83,7 @@ class DesktopVm:
         self.buf = ""
         self.master_fd, self.slave_fd = pty.openpty()
 
-        accel_args = ["-accel", "tcg", "-cpu", "max"]
+        accel_args = ["-accel", "tcg", "-cpu", "Haswell"]
         if os.access("/dev/kvm", os.R_OK | os.W_OK):
             accel_args = ["-enable-kvm", "-cpu", "host"]
 
