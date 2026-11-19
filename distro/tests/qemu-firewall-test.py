@@ -231,15 +231,8 @@ def main() -> int:
 
             # 3. Start an HTTP server inside the guest on 0.0.0.0:18080 and verify loopback works
             vm1.run_cmd(
-                "python3 -c \""
-                "import http.server, socketserver, threading; "
-                "class H(http.server.BaseHTTPRequestHandler):\n"
-                "  def do_GET(self):\n"
-                "    self.send_response(200); self.end_headers(); self.wfile.write(b'OS1-FW-TEST-OK\\n')\n"
-                "  def log_message(self, *a): pass\n"
-                "socketserver.TCPServer.allow_reuse_address = True\n"
-                "s = socketserver.TCPServer(('0.0.0.0', 18080), H)\n"
-                "s.serve_forever()\" >/tmp/fw-srv.log 2>&1 & "
+                "mkdir -p /tmp/fw-www && echo 'OS1-FW-TEST-OK' > /tmp/fw-www/index.html && "
+                "nohup python3 -m http.server 18080 --bind 0.0.0.0 --directory /tmp/fw-www >/tmp/fw-srv.log 2>&1 & "
                 "echo $! > /tmp/fw-srv.pid; sleep 2; "
                 "curl -sf http://127.0.0.1:18080/ | grep -q 'OS1-FW-TEST-OK'",
                 "LOOPBACK",
