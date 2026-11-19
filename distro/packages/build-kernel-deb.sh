@@ -69,14 +69,14 @@ else
         install -m 0644 "${KERNEL_DIR}/os1_x86_64.config" "${PKG_ROOT}/boot/config-${KREL}"
     fi
     if [[ -d "${KERNEL_DIR}/modules/lib/modules" ]]; then
-        mkdir -p "${PKG_ROOT}/lib/modules"
+        mkdir -p "${PKG_ROOT}/usr/lib/modules"
         # Copy modules under KREL (if overriding KREL, copy from first dir found)
         SRC_MOD_DIR="${KERNEL_DIR}/modules/lib/modules/${KREL}"
         if [[ ! -d "${SRC_MOD_DIR}" ]]; then
             SRC_MOD_DIR="$(find "${KERNEL_DIR}/modules/lib/modules" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
         fi
         if [[ -n "${SRC_MOD_DIR}" && -d "${SRC_MOD_DIR}" ]]; then
-            cp -a "${SRC_MOD_DIR}" "${PKG_ROOT}/lib/modules/${KREL}"
+            cp -a "${SRC_MOD_DIR}" "${PKG_ROOT}/usr/lib/modules/${KREL}"
         fi
     fi
 fi
