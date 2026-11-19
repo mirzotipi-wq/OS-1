@@ -69,11 +69,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: distro/out/kernel
-          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+          key: os1-kernel-x86_64-mod-${{ hashFiles('Makefile', 'distro/kernel/**', 'distro/tests/kernel-driver-audit.py') }}
 
       - name: Build OS-1 x86_64 kernel + modules if cache miss (T1-KBUILD)
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: ./distro/tools/os1.sh kernel --with-modules
+
+      - name: Verify OS-1 kernel driver & module coverage (T22-DRIVERS)
+        run: python3 distro/tests/kernel-driver-audit.py --check-modules
 
       - name: Build signed native OS-1 .deb packages, versioned kernel .deb & APT repository (T14-DEBS / T20-SIGN)
         run: OS1_EPHEMERAL_GPG=1 ./distro/tools/os1.sh debs

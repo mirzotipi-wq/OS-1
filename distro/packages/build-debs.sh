@@ -386,6 +386,7 @@ echo "[os1-debs] Building os1-tools_${VERSION}_all.deb..."
 TOOLS_ROOT="${PKG_WORK}/os1-tools"
 mkdir -p "${TOOLS_ROOT}/DEBIAN" "${TOOLS_ROOT}/usr/bin" "${TOOLS_ROOT}/usr/sbin"
 install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${TOOLS_ROOT}/usr/bin/os1-fs-test"
+install -m 0755 "${REPO_ROOT}/distro/tools/os1-hw-diag" "${TOOLS_ROOT}/usr/bin/os1-hw-diag"
 install -m 0755 "${REPO_ROOT}/distro/tools/os1-update-boot" "${TOOLS_ROOT}/usr/sbin/os1-update-boot"
 
 cat > "${TOOLS_ROOT}/DEBIAN/control" <<EOF
@@ -397,8 +398,8 @@ Architecture: all
 Depends: python3
 Maintainer: ${MAINTAINER}
 Description: OS-1 system verification, boot management, and diagnostic utilities
- Provides native OS-1 utilities including os1-fs-test and the atomic GRUB
- boot menu manager os1-update-boot.
+ Provides native OS-1 utilities including os1-fs-test, os1-hw-diag (redacted
+ hardware diagnostics), and the atomic GRUB boot menu manager os1-update-boot.
 EOF
 write_copyright "${TOOLS_ROOT}" "os1-tools"
 finalize_deb "${TOOLS_ROOT}" "${REPO_DIR}/os1-tools_${VERSION}_all.deb"

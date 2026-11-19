@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""Phase 22: OS-1 Hardware Diagnostic & Support-Bundle Utility (os1-hw-diag).
+
+Collects non-sensitive hardware, driver, DRM, audio, network, firewall, and
+systemd health diagnostics while redacting hostnames, MAC addresses, IP
+addresses, Wi-Fi SSIDs, and hardware serial numbers/UUIDs.
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+MAC_RE = re.compile(r"\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+IPV6_RE = re.compile(r"\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b")
+UUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
+
+
+def redact_text(text: str) -> str:
+    text = MAC_RE.sub("<REDACTED-MAC>", text)
+    text = UUID_RE.sub("<REDACTED-UUID>", text)
+    text = IPV4_RE.sub("<REDACTED-IP>", text)
+    # Only redact IPv6-like tokens containing at least 2 colons and hex digits
+    def _v6(m: re.Match[str]) -> str:
+        val = m.group(0)
+        if "::" in val or val.count(":") >= 3:
+            return "<REDACTED-IPV6>"
+        return val
+    return IPV6_RE.sub(_v6, text)
+
+
+def run_cmd(cmd: list[str], timeout: float = 5.0) -> str:
+    if not shutil.which(cmd[0]):
+        return f"<unavailable: {cmd[0]}>"
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+        out = (res.stdout or "") + (res.stderr or "")
+        return redact_text(out.strip())
+    except Exception as exc:
+        return f"<error: {exc}>"
+
+
+def read_file_safe(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return redact_text(f.read().strip())
+    except OSError:
+        return "<unavailable>"
+
+
+def collect_dmi() -> dict[str, str]:
+    dmi_dir = "/sys/class/dmi/id"
+    # Intentionally exclude product_serial, board_serial, chassis_serial, product_uuid
+    allowed = ("sys_vendor", "product_name", "board_vendor", "board_name", "bios_vendor", "bios_version")
+    data: dict[str, str] = {}
+    for key in allowed:
+        p = os.path.join(dmi_dir, key)
+        if os.path.isfile(p):
+            data[key] = read_file_safe(p)
+    return data
+
+
+def collect_drm() -> list[dict[str, str]]:
+    drm_dir = "/sys/class/drm"
+    entries: list[dict[str, str]] = []
+    if not os.path.isdir(drm_dir):
+        return entries
+    for name in sorted(os.listdir(drm_dir)):
+        if "-" not in name:
+            continue
+        status_file = os.path.join(drm_dir, name, "status")
+        if os.path.isfile(status_file):
+            entries.append({"connector": name, "status": read_file_safe(status_file)})
+    return entries
+
+
+def collect_net_devices() -> list[dict[str, str]]:
+    # Report only interface class/driver/operstate — never MAC, IP, or SSID
+    net_dir = "/sys/class/net"
+    devices: list[dict[str, str]] = []
+    if not os.path.isdir(net_dir):
+        return devices
+    for iface in sorted(os.listdir(net_dir)):
+        if iface == "lo":
+            continue
+        base = os.path.join(net_dir, iface)
+        driver_link = os.path.join(base, "device", "driver")
+        driver = os.path.basename(os.path.realpath(driver_link)) if os.path.exists(driver_link) else "virtual"
+        operstate = read_file_safe(os.path.join(base, "operstate"))
+        kind = "wireless" if os.path.isdir(os.path.join(base, "wireless")) else "wired_or_virtual"
+        devices.append({"interface_type": kind, "driver": driver, "operstate": operstate})
+    return devices
+
+
+def collect_diagnostics() -> dict[str, object]:
+    os_release: dict[str, str] = {}
+    if os.path.isfile("/etc/os-release"):
+        for line in open("/etc/os-release", encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                os_release[k] = v.strip('"')
+
+    loaded_modules: list[str] = []
+    if os.path.isfile("/proc/modules"):
+        for line in open("/proc/modules", encoding="utf-8", errors="replace"):
+            parts = line.split()
+            if parts:
+                loaded_modules.append(parts[0])
+
+    return {
+        "schema": "os1.hw-diag.v1",
+        "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "redaction_policy": "hostnames, MACs, IPs, SSIDs, UUIDs, and hardware serial numbers are excluded/redacted",
+        "os_release": {
+            "ID": os_release.get("ID", "unknown"),
+            "VERSION": os_release.get("VERSION", "unknown"),
+            "PRETTY_NAME": os_release.get("PRETTY_NAME", "unknown"),
+        },
+        "kernel_release": os.uname().release,
+        "arch": os.uname().machine,
+        "uefi_boot": os.path.isdir("/sys/firmware/efi"),
+        "dmi": collect_dmi(),
+        "drm_connectors": collect_drm(),
+        "network_devices": collect_net_devices(),
+        "loaded_module_count": len(loaded_modules),
+        "loaded_modules_sample": sorted(loaded_modules)[:60],
+        "pci_devices": run_cmd(["lspci", "-nn"]).splitlines()[:60],
+        "usb_devices": run_cmd(["lsusb"]).splitlines()[:40],
+        "failed_systemd_units": run_cmd(["systemctl", "--failed", "--no-legend", "--plain"]).splitlines(),
+        "ufw_active": run_cmd(["systemctl", "is-active", "ufw.service"]),
+    }
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Collect redacted OS-1 hardware and driver diagnostics"
+    )
+    ap.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+    args = ap.parse_args()
+
+    diag = collect_diagnostics()
+    if args.json:
+        print(json.dumps(diag, indent=2))
+        return 0
+
+    print("=== OS-1 Redacted Hardware Diagnostic Report ===")
+    print(f"Generated (UTC): {diag['generated_utc']}")
+    osr = diag["os_release"]
+    assert isinstance(osr, dict)
+    print(f"OS:              {osr.get('PRETTY_NAME')} ({osr.get('VERSION')})")
+    print(f"Kernel:          {diag['kernel_release']} ({diag['arch']})")
+    print(f"UEFI Boot:       {diag['uefi_boot']}")
+    print(f"UFW Service:     {diag['ufw_active']}")
+    print(f"Loaded Modules:  {diag['loaded_module_count']}")
+    print(f"DMI (redacted):  {json.dumps(diag['dmi'])}")
+    print(f"DRM Connectors:  {json.dumps(diag['drm_connectors'])}")
+    print(f"Net Devices:     {json.dumps(diag['network_devices'])}")
+    failed = diag["failed_systemd_units"]
+    print(f"Failed Units:    {failed if failed else 'none'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

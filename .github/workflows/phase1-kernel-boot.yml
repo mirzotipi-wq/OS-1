@@ -57,11 +57,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: distro/out/kernel
-          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+          key: os1-kernel-x86_64-mod-${{ hashFiles('Makefile', 'distro/kernel/**', 'distro/tests/kernel-driver-audit.py') }}
 
-      - name: Build OS-1 x86_64 kernel (T1-KBUILD)
+      - name: Build OS-1 x86_64 kernel + modules (T1-KBUILD)
         if: steps.kernel-cache.outputs.cache-hit != 'true'
-        run: ./distro/tools/os1.sh kernel
+        run: ./distro/tools/os1.sh kernel --with-modules
+
+      - name: Verify OS-1 kernel driver & module coverage (T22-DRIVERS)
+        run: python3 distro/tests/kernel-driver-audit.py --check-modules
 
       - name: Build minimal OS-1 userspace initramfs (T1-INITRAMFS)
         run: ./distro/tools/os1.sh initramfs

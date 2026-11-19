@@ -111,6 +111,10 @@ for sym in \
 done
 echo "[os1-kernel] Kconfig validation PASSED -> ${ARTIFACT_DIR}/os1_x86_64.config"
 
+python3 "${REPO_ROOT}/distro/tests/kernel-driver-audit.py" \
+    --config "${ARTIFACT_DIR}/os1_x86_64.config" \
+    --manifest "${ARTIFACT_DIR}/driver-manifest.json"
+
 make -C "${REPO_ROOT}" O="${BUILD_DIR}" ARCH=x86_64 include/config/kernel.release
 KERNEL_RELEASE="$(cat "${BUILD_DIR}/include/config/kernel.release")"
 if [[ "${KERNEL_RELEASE}" != *"-os1"* ]]; then
@@ -144,6 +148,11 @@ if (( BUILD_MODULES == 1 )); then
     if command -v depmod >/dev/null 2>&1; then
         depmod -b "${ARTIFACT_DIR}/modules" "${KERNEL_RELEASE}"
     fi
+    python3 "${REPO_ROOT}/distro/tests/kernel-driver-audit.py" \
+        --config "${ARTIFACT_DIR}/os1_x86_64.config" \
+        --modules-dir "${ARTIFACT_DIR}/modules" \
+        --check-modules \
+        --manifest "${ARTIFACT_DIR}/driver-manifest.json"
 fi
 
 GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"

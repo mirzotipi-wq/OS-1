@@ -41,8 +41,10 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/generate-sbom.py" \
             "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/installer/os1-firstboot" \
+            "${REPO_ROOT}/distro/tools/os1-hw-diag" \
             "${REPO_ROOT}/distro/tools/os1-update-boot" \
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
+            "${REPO_ROOT}/distro/tests/kernel-driver-audit.py" \
             "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
             "${REPO_ROOT}/distro/tests/package-verify-test.py" \
             "${REPO_ROOT}/distro/tests/firstboot-state-test.py" \
