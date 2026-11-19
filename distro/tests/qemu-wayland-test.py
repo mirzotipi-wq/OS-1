@@ -298,12 +298,18 @@ def main() -> int:
                 timeout=60.0,
             )
             vm.run_cmd(
-                "WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 "
-                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus QT_QPA_PLATFORM=wayland "
-                "nohup konsole >/dev/null 2>&1 & "
-                "sleep 8; pgrep -a konsole",
+                "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+                "systemd-run --user --unit=os1-test-konsole konsole; "
+                "for i in $(seq 1 15); do pgrep -x konsole >/dev/null 2>&1 && break; sleep 1; done; "
+                "if ! pgrep -x konsole >/dev/null 2>&1; then "
+                "  echo '=== KONSOLE DIAGNOSTICS ==='; "
+                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show-environment || true; "
+                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus journalctl --user -u os1-test-konsole -n 40 --no-pager || true; "
+                "  exit 1; "
+                "fi; "
+                "sleep 5; pgrep -a konsole",
                 "KONSOLE",
-                timeout=30.0,
+                timeout=45.0,
             )
             print("[PASS] Core apps (konsole, dolphin, firefox-esr) verified & konsole launched on Wayland", flush=True)
 
