@@ -293,9 +293,6 @@ export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 export MOZ_ENABLE_WAYLAND=1
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
 if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-    export KWIN_COMPOSE=Q
-    export KWIN_DRM_NO_AMS=1
-    export QT_QUICK_BACKEND=software
     export LIBGL_ALWAYS_SOFTWARE=1
     export GALLIUM_DRIVER=llvmpipe
 fi
@@ -305,14 +302,11 @@ EOF
     mkdir -p "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators"
     cat > "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env" <<'EOF'
 #!/bin/sh
-# OS-1 GPU environment generator: enable software compositing/rendering only when no 3D render node exists.
+# OS-1 GPU environment generator: enable Mesa llvmpipe fallback only when no 3D render node exists.
 echo "XDG_SESSION_TYPE=wayland"
 echo "MOZ_ENABLE_WAYLAND=1"
 echo "QT_AUTO_SCREEN_SCALE_FACTOR=1"
 if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
-    echo "KWIN_COMPOSE=Q"
-    echo "KWIN_DRM_NO_AMS=1"
-    echo "QT_QUICK_BACKEND=software"
     echo "LIBGL_ALWAYS_SOFTWARE=1"
     echo "GALLIUM_DRIVER=llvmpipe"
 fi

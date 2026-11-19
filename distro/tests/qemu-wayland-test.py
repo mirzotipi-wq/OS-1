@@ -321,14 +321,25 @@ def main() -> int:
             )
             print("[PASS] Core apps (konsole, dolphin, firefox-esr) verified & konsole launched on Wayland", flush=True)
 
-            # Capture real QEMU framebuffer screenshot via monitor screendump
-            vm.monitor_cmd(f"screendump {ppm_path}")
-            if not os.path.isfile(ppm_path) or os.path.getsize(ppm_path) < 1000:
+            # Capture real QEMU framebuffer screenshot via monitor screendump (retry while TCG finishes first frame)
+            w, h, ratio = 0, 0, 0.0
+            for attempt in range(1, 7):
+                vm.monitor_cmd("mouse_move 25 25")
+                time.sleep(5.0)
+                vm.monitor_cmd(f"screendump {ppm_path}")
+                if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) >= 1000:
+                    w, h, ratio = ppm_to_png_and_check_nonblack(ppm_path, png_path)
+                    print(
+                        f"[os1-phase5-test] Screendump attempt {attempt}: {w}x{h}, non-black={ratio:.1%}",
+                        flush=True,
+                    )
+                    if ratio >= 0.01:
+                        break
+            if w == 0 or h == 0:
                 raise RuntimeError(f"QEMU screendump failed or empty at {ppm_path}")
-            w, h, ratio = ppm_to_png_and_check_nonblack(ppm_path, png_path)
-            print(f"[PASS] Captured real Wayland desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
             if ratio < 0.01:
-                raise RuntimeError(f"Screenshot appears completely black (non-black={ratio:.2%})")
+                raise RuntimeError(f"Screenshot appears completely black after retries (non-black={ratio:.2%})")
+            print(f"[PASS] Captured real Wayland desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
 
             vm.poweroff_and_wait("os1")
             print("[PASS] Desktop session clean poweroff completed", flush=True)
