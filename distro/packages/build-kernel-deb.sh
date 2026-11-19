@@ -77,6 +77,7 @@ else
         fi
         if [[ -n "${SRC_MOD_DIR}" && -d "${SRC_MOD_DIR}" ]]; then
             cp -a "${SRC_MOD_DIR}" "${PKG_ROOT}/usr/lib/modules/${KREL}"
+            rm -f "${PKG_ROOT}/usr/lib/modules/${KREL}/build" "${PKG_ROOT}/usr/lib/modules/${KREL}/source"
         fi
     fi
 fi
