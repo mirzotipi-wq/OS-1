@@ -14,8 +14,8 @@
 |---|---|---|---|---|
 | **0** | Forensic audit & technical plan | — | Repo audited; `docs/*`, ADRs, and `distro/` scaffolding committed; project resumable without chat history. | **PASS** |
 | **1** | Build real OS-1 kernel + QEMU serial boot | Phase 0 | Deterministic x86-64 `os1` kernel built from exact SHA; boots in QEMU to serial console + minimal initramfs PID 1 proof; logs & SHA-256 provenance recorded. | **PASS** (CI `44461985823`) |
-| **2** | Real Linux userspace & persistent storage | Phase 1 | Debian stable rootfs + systemd + networking + APT + non-root user on persistent ext4 disk image; boots with OS-1 kernel, installs a package, persists file across reboot. | **IN PROGRESS** |
-| **3** | Bootable UEFI live ISO & recovery | Phase 2 | One-command x86-64 UEFI live ISO boots cleanly in fresh QEMU/OVMF VM without host bind mounts; recovery mode works; SHA-256 + provenance recorded. | NOT STARTED |
+| **2** | Real Linux userspace & persistent storage | Phase 1 | Debian stable rootfs + systemd + networking + APT + non-root user on persistent ext4 disk image; boots with OS-1 kernel, installs a package, persists file across reboot. | **PASS** (CI `44466206157`) |
+| **3** | Bootable UEFI live ISO & recovery | Phase 2 | One-command x86-64 UEFI live ISO boots cleanly in fresh QEMU/OVMF VM without host bind mounts; recovery mode works; SHA-256 + provenance recorded. | **IN PROGRESS** |
 | **4** | Real installation on virtual disk | Phase 3 | Calamares (or scripted+GUI) installs from live ISO to clean VM disk; ISO detached; boots installed OS-1 kernel, updates packages, survives reboot. | NOT STARTED |
 | **5** | Stable graphical Wayland session | Phase 4 | KDE Plasma/KWin Wayland + XWayland + display manager + PipeWire + NetworkManager; clean graphical login, terminal/browser/files, resize, audio, logout, reboot. | NOT STARTED |
 | **6** | Visual design system & OS-1 identity | Phase 5 | Original icons, typography, wallpapers, light/dark tokens, materials, window chrome, shadows, blur; screenshot baseline at `1440×900`, `1920×1080`, HiDPI; license inventory. | NOT STARTED |

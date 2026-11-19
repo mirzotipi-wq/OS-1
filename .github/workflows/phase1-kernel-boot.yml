@@ -52,7 +52,15 @@ jobs:
       - name: Run OS-1 repository audit (T0-AUDIT)
         run: ./distro/tools/os1.sh audit
 
+      - name: Restore cached OS-1 x86_64 kernel
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: distro/out/kernel
+          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+
       - name: Build OS-1 x86_64 kernel (T1-KBUILD)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: ./distro/tools/os1.sh kernel
 
       - name: Build minimal OS-1 userspace initramfs (T1-INITRAMFS)
