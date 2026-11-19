@@ -56,6 +56,7 @@ PACKAGES=(
     util-linux
     login
     passwd
+    python3
     ufw
     nftables
 )

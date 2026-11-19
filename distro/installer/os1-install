@@ -1,214 +1,573 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-# OS-1 Phase 4 UEFI System Installer (nondestructive by default).
-set -euo pipefail
+"""OS-1 System Installer (UEFI / GPT) — Phase 18 Preflight-Complete & Credential-Safe.
 
-DISK=""
-USERNAME=""
-PASSWORD=""
-HOSTNAME_VAL="os1"
-TIMEZONE="UTC"
-LOCALE="en_US.UTF-8"
-CONFIRM_ERASE=0
+Explicit 13-stage installation pipeline:
+  1. Argument parsing (rejects plaintext --password in argv)
+  2. Environment discovery
+  3. User-input validation (username, reserved/existing accounts, stdin/fd password, hostname, tz, locale)
+  4. Target-disk validation (whole block device, not root/live/mounted, writable, >= min size)
+  5. Source-artifact validation (rootfs + kernel)
+  6. Installation plan generation (--plan, --dry-run, --json-plan; never logs password)
+  7. Final confirmation (--confirm-erase-disk + optional --confirm-phrase + pre-apply revalidation)
+  8. Destructive apply stage (GPT partitioning + FAT32 ESP + ext4 root)
+  9. Filesystem population (copy live rootfs + kernel)
+ 10. Bootloader installation (standalone UEFI GRUB)
+ 11. User & system configuration (stdin chpasswd, live autologin cleanup, machine-id, SSH keys)
+ 12. Post-install validation (GPT, ESP, rootfs, fstab UUIDs, EFI files, user, no live autologin)
+ 13. Cleanup and final report
 
-usage() {
-    cat <<EOF
-OS-1 System Installer (UEFI / GPT)
+SAFETY: No destructive command runs before stages 1-7 succeed completely.
+"""
 
-Usage: os1-install --disk <device> --user <name> --password <pass> [options]
+from __future__ import annotations
 
-Required:
-  --disk <dev>            Target block device (e.g. /dev/vda, /dev/sda, /dev/nvme0n1)
-  --user <name>           First non-root administrator username
-  --password <pass>       Password for the first user
+import argparse
+import errno
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
 
-Optional:
-  --hostname <name>       System hostname (default: os1)
-  --timezone <tz>         IANA timezone (default: UTC)
-  --locale <locale>       System locale (default: en_US.UTF-8)
-  --confirm-erase-disk    REQUIRED explicit confirmation to erase and repartition --disk
-  -h, --help              Show this help message
+MIN_DISK_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB minimum supported target
+MAX_PASSWORD_BYTES = 256
+EFI_PART_MIB = 256
+RESERVED_USERNAMES = frozenset({
+    "root",
+    "os1",
+    "daemon",
+    "bin",
+    "sys",
+    "sync",
+    "games",
+    "man",
+    "lp",
+    "mail",
+    "news",
+    "uucp",
+    "proxy",
+    "www-data",
+    "backup",
+    "list",
+    "irc",
+    "_apt",
+    "nobody",
+    "nogroup",
+    "systemd-network",
+    "systemd-resolve",
+    "systemd-timesync",
+    "messagebus",
+    "sddm",
+    "polkitd",
+    "avahi",
+    "colord",
+    "rtkit",
+    "sshd",
+    "admin",
+    "administrator",
+    "guest",
+})
+ALLOWED_USER_GROUPS = "sudo,audio,video,netdev,plugdev"
+USERNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 
-SAFETY: Without --confirm-erase-disk, os1-install runs in NONDESTRUCTIVE dry-run
-mode and will NOT modify any partition table or filesystem.
-EOF
-}
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --disk) DISK="$2"; shift 2 ;;
-        --user) USERNAME="$2"; shift 2 ;;
-        --password) PASSWORD="$2"; shift 2 ;;
-        --hostname) HOSTNAME_VAL="$2"; shift 2 ;;
-        --timezone) TIMEZONE="$2"; shift 2 ;;
-        --locale) LOCALE="$2"; shift 2 ;;
-        --confirm-erase-disk) CONFIRM_ERASE=1; shift ;;
-        -h|--help) usage; exit 0 ;;
-        *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 2 ;;
-    esac
-done
+def eprint(*args: object) -> None:
+    print(*args, file=sys.stderr, flush=True)
 
-if [[ "$(id -u)" -ne 0 ]]; then
-    echo "ERROR: os1-install must run as root." >&2
-    exit 1
-fi
 
-if [[ -z "${DISK}" || -z "${USERNAME}" || -z "${PASSWORD}" ]]; then
-    echo "ERROR: --disk, --user, and --password are required." >&2
-    usage
-    exit 2
-fi
+def run_checked(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=True, **kwargs)
 
-if [[ ! -b "${DISK}" ]]; then
-    echo "ERROR: Target disk is not a block device: ${DISK}" >&2
-    exit 1
-fi
 
-if [[ ! "${USERNAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
-    echo "ERROR: Invalid Linux username: ${USERNAME}" >&2
-    exit 2
-fi
+def read_password_from_fd(fd: int) -> str:
+    """Read raw password bytes from a file descriptor without echoing or logging."""
+    chunks: list[bytes] = []
+    while True:
+        data = os.read(fd, 1024)
+        if not data:
+            break
+        chunks.append(data)
+        if sum(len(c) for c in chunks) > MAX_PASSWORD_BYTES + 4:
+            raise ValueError(f"Password exceeds maximum supported length ({MAX_PASSWORD_BYTES} bytes).")
+    raw = b"".join(chunks)
+    # Strip a single trailing newline (standard pipe convention)
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+    if b"\x00" in raw:
+        raise ValueError("Password must not contain NUL bytes.")
+    if b"\r" in raw or b"\n" in raw:
+        raise ValueError("Password must not contain carriage return or newline characters.")
+    if len(raw) == 0:
+        raise ValueError("Password must not be empty.")
+    if len(raw) > MAX_PASSWORD_BYTES:
+        raise ValueError(f"Password exceeds maximum supported length ({MAX_PASSWORD_BYTES} bytes).")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Password must be valid UTF-8.") from exc
 
-if [[ ! -d /run/live/ro || ! -f /run/live/medium/boot/vmlinuz ]]; then
-    echo "ERROR: Live media not detected at /run/live/ro and /run/live/medium/boot/vmlinuz." >&2
-    exit 1
-fi
 
-echo "================================================================"
-echo " OS-1 UEFI Installation Plan"
-echo "================================================================"
-echo "  Target Disk:  ${DISK} (ALL EXISTING DATA WILL BE ERASED)"
-echo "  Layout:       GPT -> p1: 256 MiB FAT32 ESP + p2: ext4 root"
-echo "  Hostname:     ${HOSTNAME_VAL}"
-echo "  Admin User:   ${USERNAME} (sudo)"
-echo "  Timezone:     ${TIMEZONE}"
-echo "  Locale:       ${LOCALE}"
-echo "================================================================"
+def get_existing_passwd_users(rootfs_dir: Path) -> set[str]:
+    users: set[str] = set()
+    passwd_file = rootfs_dir / "etc" / "passwd"
+    if passwd_file.is_file():
+        for line in passwd_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line and not line.startswith("#") and ":" in line:
+                users.add(line.split(":", 1)[0])
+    return users
 
-if (( CONFIRM_ERASE == 0 )); then
-    echo "WARNING: NONDESTRUCTIVE DEFAULT MODE." >&2
-    echo "Refusing to erase ${DISK} without explicit --confirm-erase-disk flag." >&2
-    exit 3
-fi
 
-# Determine partition device naming (/dev/vda1 vs /dev/nvme0n1p1)
-if [[ "${DISK}" =~ [0-9]$ ]]; then
-    EFI_PART="${DISK}p1"
-    ROOT_PART="${DISK}p2"
-else
-    EFI_PART="${DISK}1"
-    ROOT_PART="${DISK}2"
-fi
+def validate_username(username: str, existing_users: set[str]) -> None:
+    if not USERNAME_RE.match(username):
+        raise ValueError(
+            f"Invalid Linux username {username!r}: must start with a lowercase letter and contain only [a-z0-9_-] (max 32 chars)."
+        )
+    if username in RESERVED_USERNAMES:
+        raise ValueError(f"Username {username!r} is reserved and cannot be selected.")
+    if username in existing_users:
+        raise ValueError(f"Username {username!r} already exists in target rootfs /etc/passwd.")
 
-TARGET="/mnt/os1-target"
-cleanup() {
-    set +e
-    umount -R "${TARGET}" 2>/dev/null || true
-}
-trap cleanup EXIT
 
-echo "[os1-install] Partitioning ${DISK} with GPT (ESP + ext4 root)..."
-parted -s "${DISK}" mklabel gpt
-parted -s "${DISK}" mkpart ESP fat32 1MiB 257MiB
-parted -s "${DISK}" set 1 esp on
-parted -s "${DISK}" mkpart OS1_ROOT ext4 257MiB 100%
+def validate_hostname(hostname: str) -> None:
+    if not HOSTNAME_RE.match(hostname):
+        raise ValueError(f"Invalid hostname {hostname!r}: must match RFC-1123 label rules.")
 
-# Wait for kernel/udev to expose partition nodes
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    [[ -b "${EFI_PART}" && -b "${ROOT_PART}" ]] && break
-    partprobe "${DISK}" 2>/dev/null || true
-    sleep 1
-done
 
-if [[ ! -b "${EFI_PART}" || ! -b "${ROOT_PART}" ]]; then
-    echo "ERROR: Partition nodes ${EFI_PART} / ${ROOT_PART} did not appear." >&2
-    exit 1
-fi
+def read_mounts() -> list[tuple[str, str]]:
+    mounts: list[tuple[str, str]] = []
+    try:
+        with open("/proc/mounts", encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mounts.append((parts[0], parts[1]))
+    except OSError:
+        pass
+    return mounts
 
-echo "[os1-install] Formatting ${EFI_PART} (FAT32) and ${ROOT_PART} (ext4)..."
-mkfs.fat -F 32 -n OS1_EFI "${EFI_PART}" >/dev/null
-mkfs.ext4 -F -O ^orphan_file,^metadata_csum_seed -L OS1_ROOT "${ROOT_PART}" >/dev/null
 
-EFI_UUID="$(blkid -s UUID -o value "${EFI_PART}")"
-ROOT_UUID="$(blkid -s UUID -o value "${ROOT_PART}")"
-ROOT_PARTUUID="$(blkid -s PARTUUID -o value "${ROOT_PART}")"
+def get_disk_identity(disk_path: str, allow_regular_file: bool = False) -> dict:
+    """Inspect target disk safely without modifying it."""
+    if not os.path.exists(disk_path):
+        raise ValueError(f"Target disk does not exist: {disk_path}")
 
-echo "[os1-install] Mounting target partitions at ${TARGET}..."
-mkdir -p "${TARGET}"
-mount "${ROOT_PART}" "${TARGET}"
-mkdir -p "${TARGET}/boot/efi"
-mount "${EFI_PART}" "${TARGET}/boot/efi"
+    real_disk = os.path.realpath(disk_path)
+    st = os.stat(real_disk)
+    is_block = stat.S_ISBLK(st.st_mode)
+    is_reg = stat.S_ISREG(st.st_mode)
 
-echo "[os1-install] Copying clean OS-1 rootfs from /run/live/ro..."
-cp -a /run/live/ro/. "${TARGET}/"
+    if not is_block and not (allow_regular_file and is_reg):
+        raise ValueError(f"Target disk is not a block device: {disk_path}")
 
-echo "[os1-install] Installing OS-1 kernel to /boot/vmlinuz-os1 and ESP..."
-mkdir -p "${TARGET}/boot/efi/EFI/os1"
-cp -f /run/live/medium/boot/vmlinuz "${TARGET}/boot/vmlinuz-os1"
-cp -f /run/live/medium/boot/vmlinuz "${TARGET}/boot/efi/EFI/os1/vmlinuz-os1"
-KERNEL_REL="$(uname -r)"
+    dev_name = os.path.basename(real_disk)
+    major = os.major(st.st_rdev) if is_block else 0
+    minor = os.minor(st.st_rdev) if is_block else 0
+    size_bytes = 0
+    readonly = False
+    existing_parts: list[str] = []
 
-# Remove live-mode marker
-rm -f "${TARGET}/etc/os1-live-mode"
+    if is_block:
+        sys_block = Path("/sys/block") / dev_name
+        if not sys_block.is_dir():
+            raise ValueError(
+                f"Target {disk_path} ({real_disk}) is not a whole block device (partitions are not allowed)."
+            )
+        ro_file = sys_block / "ro"
+        if ro_file.is_file() and ro_file.read_text(encoding="utf-8").strip() == "1":
+            readonly = True
+        size_file = sys_block / "size"
+        if size_file.is_file():
+            size_bytes = int(size_file.read_text(encoding="utf-8").strip()) * 512
+        for entry in sorted(sys_block.iterdir()):
+            if entry.is_dir() and (entry / "partition").is_file():
+                existing_parts.append(f"/dev/{entry.name}")
+    else:
+        size_bytes = st.st_size
+        readonly = not os.access(real_disk, os.W_OK)
 
-# Update /etc/os-release to reflect installed system
-cat > "${TARGET}/etc/os-release" <<EOF
-PRETTY_NAME="OS-1 0.4-dev (Installed)"
-NAME="OS-1"
-VERSION_ID="0.4"
-VERSION="0.4-dev (Phase 4 Installed)"
-ID=os1
-ID_LIKE=debian
-HOME_URL="https://github.com/mirzotipi-wq/OS-1"
-EOF
+    if readonly:
+        raise ValueError(f"Target disk is read-only: {disk_path}")
+    if size_bytes <= 0:
+        raise ValueError(f"Target disk has zero size: {disk_path}")
+    if size_bytes < MIN_DISK_BYTES:
+        raise ValueError(
+            f"Target disk {disk_path} is too small ({size_bytes // (1024 * 1024)} MiB; minimum is {MIN_DISK_BYTES // (1024 * 1024)} MiB)."
+        )
 
-# Write real /etc/fstab with UUIDs
-cat > "${TARGET}/etc/fstab" <<EOF
-UUID=${ROOT_UUID}  /          ext4  defaults,noatime,errors=remount-ro  0  1
-UUID=${EFI_UUID}   /boot/efi  vfat  umask=0077                          0  2
-EOF
+    # Check mounted filesystems, active root, and live medium
+    mounts = read_mounts()
+    for src, mnt in mounts:
+        if not src.startswith("/dev/"):
+            continue
+        real_src = os.path.realpath(src)
+        if real_src == real_disk or real_src in existing_parts or real_src.startswith(real_disk):
+            # Ensure prefix match doesn't false-match /dev/sda vs /dev/sda10 vs /dev/sdaa
+            suffix = real_src[len(real_disk):]
+            if suffix == "" or suffix[0].isdigit() or (suffix.startswith("p") and len(suffix) > 1 and suffix[1].isdigit()):
+                if mnt == "/":
+                    raise ValueError(f"Refusing to target disk containing active root filesystem: {disk_path}")
+                if mnt.startswith("/run/live"):
+                    raise ValueError(f"Refusing to target active live-media disk: {disk_path}")
+                raise ValueError(f"Target disk {disk_path} has mounted partition {src} at {mnt}.")
 
-# Hostname & hosts
-echo "${HOSTNAME_VAL}" > "${TARGET}/etc/hostname"
-cat > "${TARGET}/etc/hosts" <<EOF
-127.0.0.1	localhost
-127.0.1.1	${HOSTNAME_VAL}
-::1		localhost ip6-localhost ip6-loopback
-EOF
+    return {
+        "disk": disk_path,
+        "realpath": real_disk,
+        "major": major,
+        "minor": minor,
+        "size_bytes": size_bytes,
+        "size_mib": size_bytes // (1024 * 1024),
+        "existing_partitions": existing_parts,
+    }
 
-# Timezone & locale
-if [[ -f "${TARGET}/usr/share/zoneinfo/${TIMEZONE}" ]]; then
-    ln -sf "/usr/share/zoneinfo/${TIMEZONE}" "${TARGET}/etc/localtime"
-    echo "${TIMEZONE}" > "${TARGET}/etc/timezone"
-fi
-sed -i "s/^# *${LOCALE}/${LOCALE}/" "${TARGET}/etc/locale.gen" || true
-echo "LANG=${LOCALE}" > "${TARGET}/etc/default/locale"
 
-# Configure first user and remove default bring-up user if different
-mount --bind /dev "${TARGET}/dev"
-mount --bind /proc "${TARGET}/proc"
-mount --bind /sys "${TARGET}/sys"
+def read_os_release_pretty(rootfs_dir: Path) -> str:
+    os_rel = rootfs_dir / "etc" / "os-release"
+    if os_rel.is_file():
+        for line in os_rel.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("PRETTY_NAME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    return "OS-1"
 
-chroot "${TARGET}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
-locale-gen
-if ! id -u '${USERNAME}' >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -G sudo,audio,video,netdev,plugdev '${USERNAME}'
-fi
-echo '${USERNAME}:${PASSWORD}' | chpasswd
-if [[ '${USERNAME}' != 'os1' ]] && id -u os1 >/dev/null 2>&1; then
-    userdel -r os1 || true
-fi
-"
 
-# Generate standalone UEFI GRUB bootloader on ESP (boots directly by PARTUUID, zero initramfs needed)
-echo "[os1-install] Installing standalone x86-64 UEFI GRUB bootloader to ESP..."
-mkdir -p "${TARGET}/boot/grub" "${TARGET}/boot/efi/EFI/BOOT" "${TARGET}/boot/efi/EFI/os1"
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    # Explicitly reject plaintext --password in argv (Section 4.4 / 8.3)
+    for arg in argv:
+        if arg == "--password" or arg.startswith("--password="):
+            eprint("ERROR: --password on the command line is forbidden for credential safety.")
+            eprint("Use --password-stdin or --password-fd <N> instead.")
+            sys.exit(2)
 
-cat > "${TARGET}/boot/grub/grub.cfg" <<EOF
-insmod part_gpt
+    parser = argparse.ArgumentParser(
+        prog="os1-install",
+        description="OS-1 System Installer (UEFI / GPT) — Nondestructive by default.",
+    )
+    parser.add_argument("--disk", required=True, help="Target whole block device (e.g. /dev/vda, /dev/nvme0n1)")
+    parser.add_argument("--user", required=True, help="First non-root administrator username")
+    pw_group = parser.add_mutually_exclusive_group(required=False)
+    pw_group.add_argument("--password-stdin", action="store_true", help="Read user password from stdin")
+    pw_group.add_argument("--password-fd", type=int, help="Read user password from file descriptor N")
+    parser.add_argument("--hostname", default="os1", help="System hostname (default: os1)")
+    parser.add_argument("--timezone", default="UTC", help="IANA timezone (default: UTC)")
+    parser.add_argument("--locale", default="en_US.UTF-8", help="System locale (default: en_US.UTF-8)")
+    parser.add_argument("--plan", action="store_true", help="Print installation plan and exit without modifying disk")
+    parser.add_argument("--dry-run", action="store_true", help="Run all preflight validations and print plan without modifying disk")
+    parser.add_argument("--json-plan", action="store_true", help="Emit installation plan as JSON and exit without modifying disk")
+    parser.add_argument("--confirm-erase-disk", action="store_true", help="Explicit confirmation to erase and repartition --disk")
+    parser.add_argument("--confirm-phrase", default="", help="Optional confirmation phrase matching 'ERASE <disk>'")
+    parser.add_argument("--source-ro", default="/run/live/ro", help=argparse.SUPPRESS)
+    parser.add_argument("--source-kernel", default="/run/live/medium/boot/vmlinuz", help=argparse.SUPPRESS)
+    parser.add_argument("--allow-file-target-for-preflight-test", action="store_true", help=argparse.SUPPRESS)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    # === STAGE 1: Argument parsing ===
+    args = parse_args(argv)
+    plan_only = args.plan or args.dry_run or args.json_plan
+
+    if not plan_only and os.geteuid() != 0:
+        eprint("ERROR: os1-install must run as root to perform installation.")
+        return 1
+
+    # === STAGE 2: Environment discovery ===
+    source_ro = Path(args.source_ro)
+    source_kernel = Path(args.source_kernel)
+    kernel_rel = os.uname().release
+
+    # === STAGE 5 (early read-only check): Source-artifact validation ===
+    if not source_ro.is_dir() or not (source_ro / "etc").is_dir():
+        eprint(f"ERROR: Live rootfs artifact not found or invalid at {source_ro}.")
+        return 1
+    if not source_kernel.is_file() or source_kernel.stat().st_size == 0:
+        eprint(f"ERROR: Live kernel artifact not found or empty at {source_kernel}.")
+        return 1
+
+    # === STAGE 3: User-input validation ===
+    existing_users = get_existing_passwd_users(source_ro)
+    try:
+        validate_username(args.user, existing_users)
+        validate_hostname(args.hostname)
+    except ValueError as exc:
+        eprint(f"ERROR: {exc}")
+        return 2
+
+    tz_file = source_ro / "usr" / "share" / "zoneinfo" / args.timezone
+    if not tz_file.is_file():
+        eprint(f"ERROR: Unknown timezone {args.timezone!r} (not found in target zoneinfo).")
+        return 2
+
+    password: str | None = None
+    if args.password_stdin:
+        try:
+            password = read_password_from_fd(sys.stdin.fileno())
+        except ValueError as exc:
+            eprint(f"ERROR: Invalid password: {exc}")
+            return 2
+    elif args.password_fd is not None:
+        try:
+            password = read_password_from_fd(args.password_fd)
+        except (ValueError, OSError) as exc:
+            eprint(f"ERROR: Failed to read password from fd {args.password_fd}: {exc}")
+            return 2
+    elif not plan_only:
+        eprint("ERROR: Password must be supplied via --password-stdin or --password-fd <N>.")
+        return 2
+
+    # === STAGE 4: Target-disk validation ===
+    try:
+        disk_info = get_disk_identity(
+            args.disk,
+            allow_regular_file=(plan_only and args.allow_file_target_for_preflight_test),
+        )
+    except ValueError as exc:
+        eprint(f"ERROR: {exc}")
+        return 1
+
+    root_size_mib = disk_info["size_mib"] - EFI_PART_MIB - 1
+    os_pretty = read_os_release_pretty(source_ro)
+
+    # === STAGE 6: Installation plan generation (NEVER includes password) ===
+    plan = {
+        "target_disk": disk_info["disk"],
+        "target_realpath": disk_info["realpath"],
+        "target_size_mib": disk_info["size_mib"],
+        "existing_partitions": disk_info["existing_partitions"],
+        "partition_table": "gpt",
+        "efi_partition_mib": EFI_PART_MIB,
+        "efi_filesystem": "vfat",
+        "root_partition_mib": root_size_mib,
+        "root_filesystem": "ext4",
+        "encryption_enabled": False,
+        "hostname": args.hostname,
+        "username": args.user,
+        "user_groups": ALLOWED_USER_GROUPS.split(","),
+        "timezone": args.timezone,
+        "locale": args.locale,
+        "kernel_version": kernel_rel,
+        "bootloader_destination": "/boot/efi/EFI/BOOT/BOOTX64.EFI",
+        "source_rootfs": str(source_ro),
+        "source_kernel": str(source_kernel),
+        "os_version": os_pretty,
+        "erase_warning": f"ALL EXISTING DATA ON {disk_info['disk']} WILL BE ERASED",
+    }
+
+    if args.json_plan:
+        print(json.dumps(plan, indent=2))
+        return 0
+
+    print("================================================================")
+    print(" OS-1 UEFI Installation Plan")
+    print("================================================================")
+    print(f"  OS Version:   {plan['os_version']}")
+    print(f"  Target Disk:  {plan['target_disk']} ({plan['target_size_mib']} MiB) — ALL EXISTING DATA WILL BE ERASED")
+    print(f"  Existing:     {', '.join(plan['existing_partitions']) or 'none'}")
+    print(f"  Layout:       GPT -> p1: {EFI_PART_MIB} MiB FAT32 ESP + p2: ~{root_size_mib} MiB ext4 root")
+    print(f"  Encryption:   {'enabled' if plan['encryption_enabled'] else 'disabled'}")
+    print(f"  Hostname:     {plan['hostname']}")
+    print(f"  Admin User:   {plan['username']} ({ALLOWED_USER_GROUPS})")
+    print(f"  Timezone:     {plan['timezone']}")
+    print(f"  Locale:       {plan['locale']}")
+    print(f"  Kernel:       {plan['kernel_version']}")
+    print(f"  Bootloader:   {plan['bootloader_destination']}")
+    print(f"  Source:       {plan['source_rootfs']} + {plan['source_kernel']}")
+    print("================================================================", flush=True)
+
+    if plan_only:
+        print("[os1-install] Dry-run/plan mode complete. No disk modifications were made.")
+        return 0
+
+    # === STAGE 7: Final confirmation & pre-apply revalidation ===
+    if not args.confirm_erase_disk:
+        eprint("WARNING: NONDESTRUCTIVE DEFAULT MODE.")
+        eprint(f"Refusing to erase {args.disk} without explicit --confirm-erase-disk flag.")
+        return 3
+
+    if args.confirm_phrase and args.confirm_phrase != f"ERASE {args.disk}":
+        eprint(f"ERROR: Confirmation phrase mismatch (expected 'ERASE {args.disk}').")
+        return 3
+
+    # Revalidate target device identity immediately before partitioning
+    try:
+        disk_info_now = get_disk_identity(args.disk, allow_regular_file=False)
+    except ValueError as exc:
+        eprint(f"ERROR: Pre-apply revalidation failed: {exc}")
+        return 1
+
+    if (
+        disk_info_now["realpath"] != disk_info["realpath"]
+        or disk_info_now["major"] != disk_info["major"]
+        or disk_info_now["minor"] != disk_info["minor"]
+        or disk_info_now["size_bytes"] != disk_info["size_bytes"]
+    ):
+        eprint("ERROR: Target disk identity changed between planning and apply. Aborting.")
+        return 1
+
+    assert password is not None
+
+    disk = disk_info["realpath"]
+    if disk[-1].isdigit():
+        efi_part = f"{disk}p1"
+        root_part = f"{disk}p2"
+    else:
+        efi_part = f"{disk}1"
+        root_part = f"{disk}2"
+
+    target = Path("/mnt/os1-target")
+
+    def cleanup_mounts() -> None:
+        subprocess.run(["umount", "-R", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    try:
+        # === STAGE 8: Destructive apply stage ===
+        print(f"[os1-install] Partitioning {disk} with GPT (ESP + ext4 root)...", flush=True)
+        run_checked(["parted", "-s", disk, "mklabel", "gpt"])
+        run_checked(["parted", "-s", disk, "mkpart", "ESP", "fat32", "1MiB", f"{EFI_PART_MIB + 1}MiB"])
+        run_checked(["parted", "-s", disk, "set", "1", "esp", "on"])
+        run_checked(["parted", "-s", disk, "mkpart", "OS1_ROOT", "ext4", f"{EFI_PART_MIB + 1}MiB", "100%"])
+
+        import time
+        for _ in range(10):
+            if os.path.exists(efi_part) and os.path.exists(root_part):
+                break
+            subprocess.run(["partprobe", disk], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(1)
+
+        if not (os.path.exists(efi_part) and os.path.exists(root_part)):
+            eprint(f"ERROR: Partition nodes {efi_part} / {root_part} did not appear.")
+            return 1
+
+        print(f"[os1-install] Formatting {efi_part} (FAT32) and {root_part} (ext4)...", flush=True)
+        run_checked(["mkfs.fat", "-F", "32", "-n", "OS1_EFI", efi_part], stdout=subprocess.DEVNULL)
+        run_checked(
+            ["mkfs.ext4", "-F", "-O", "^orphan_file,^metadata_csum_seed", "-L", "OS1_ROOT", root_part],
+            stdout=subprocess.DEVNULL,
+        )
+
+        efi_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", efi_part], text=True).strip()
+        root_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", root_part], text=True).strip()
+        root_partuuid = subprocess.check_output(["blkid", "-s", "PARTUUID", "-o", "value", root_part], text=True).strip()
+
+        # === STAGE 9: Filesystem population ===
+        print(f"[os1-install] Mounting target partitions at {target}...", flush=True)
+        target.mkdir(parents=True, exist_ok=True)
+        run_checked(["mount", root_part, str(target)])
+        (target / "boot" / "efi").mkdir(parents=True, exist_ok=True)
+        run_checked(["mount", efi_part, str(target / "boot" / "efi")])
+
+        print(f"[os1-install] Copying clean OS-1 rootfs from {source_ro}...", flush=True)
+        run_checked(["cp", "-a", f"{source_ro}/.", f"{target}/"])
+
+        print(f"[os1-install] Installing OS-1 kernel ({kernel_rel}) to /boot and ESP...", flush=True)
+        efi_os1_dir = target / "boot" / "efi" / "EFI" / "os1"
+        efi_os1_dir.mkdir(parents=True, exist_ok=True)
+        vmlinuz_versioned = f"vmlinuz-{kernel_rel}"
+        shutil.copyfile(source_kernel, target / "boot" / vmlinuz_versioned)
+        shutil.copyfile(source_kernel, target / "boot" / "vmlinuz-os1")
+        shutil.copyfile(source_kernel, efi_os1_dir / vmlinuz_versioned)
+        shutil.copyfile(source_kernel, efi_os1_dir / "vmlinuz-os1")
+
+        # === STAGE 11 (host-side system identity & live cleanup) ===
+        # Remove live-mode marker
+        live_marker = target / "etc" / "os1-live-mode"
+        if live_marker.exists():
+            live_marker.unlink()
+
+        # Remove live SDDM autologin so installed system never targets deleted live user
+        sddm_conf = target / "etc" / "sddm.conf.d" / "10-os1-wayland.conf"
+        if sddm_conf.is_file():
+            cleaned_lines: list[str] = []
+            in_autologin = False
+            for line in sddm_conf.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    in_autologin = stripped.lower() == "[autologin]"
+                if not in_autologin:
+                    cleaned_lines.append(line)
+            sddm_conf.write_text("\n".join(cleaned_lines).rstrip() + "\n", encoding="utf-8")
+
+        # Write real /etc/fstab with stable UUIDs
+        (target / "etc" / "fstab").write_text(
+            f"UUID={root_uuid}  /          ext4  defaults,noatime,errors=remount-ro  0  1\n"
+            f"UUID={efi_uuid}   /boot/efi  vfat  umask=0077                          0  2\n",
+            encoding="utf-8",
+        )
+
+        # Hostname & hosts
+        (target / "etc" / "hostname").write_text(f"{args.hostname}\n", encoding="utf-8")
+        (target / "etc" / "hosts").write_text(
+            f"127.0.0.1\tlocalhost\n127.0.1.1\t{args.hostname}\n::1\t\tlocalhost ip6-localhost ip6-loopback\n",
+            encoding="utf-8",
+        )
+
+        # Timezone & locale
+        localtime_link = target / "etc" / "localtime"
+        if localtime_link.exists() or localtime_link.is_symlink():
+            localtime_link.unlink()
+        os.symlink(f"/usr/share/zoneinfo/{args.timezone}", localtime_link)
+        (target / "etc" / "timezone").write_text(f"{args.timezone}\n", encoding="utf-8")
+
+        locale_gen = target / "etc" / "locale.gen"
+        if locale_gen.is_file():
+            lg_text = locale_gen.read_text(encoding="utf-8", errors="replace")
+            lg_text = re.sub(rf"^#\s*{re.escape(args.locale)}", args.locale, lg_text, flags=re.MULTILINE)
+            locale_gen.write_text(lg_text, encoding="utf-8")
+        (target / "etc" / "default" / "locale").write_text(f"LANG={args.locale}\n", encoding="utf-8")
+
+        # Regenerate machine-id on first boot / setup
+        machine_id = target / "etc" / "machine-id"
+        machine_id.write_text("", encoding="utf-8")
+
+        # Mount virtual filesystems for chroot configuration
+        for vfs in ("dev", "proc", "sys"):
+            run_checked(["mount", "--bind", f"/{vfs}", str(target / vfs)])
+
+        chroot_env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "DEBIAN_FRONTEND": "noninteractive"}
+
+        run_checked(["chroot", str(target), "locale-gen"], env=chroot_env)
+        run_checked(["chroot", str(target), "systemd-machine-id-setup"], env=chroot_env)
+
+        # Create requested non-root admin user without any shell interpolation
+        run_checked(
+            ["chroot", str(target), "useradd", "-m", "-s", "/bin/bash", "-G", ALLOWED_USER_GROUPS, args.user],
+            env=chroot_env,
+        )
+
+        # Pass credentials strictly via protected stdin pipe to chpasswd
+        cred_payload = f"{args.user}:{password}\n".encode("utf-8")
+        try:
+            run_checked(["chroot", str(target), "chpasswd"], input=cred_payload, env=chroot_env)
+        finally:
+            password = ""
+            cred_payload = b""
+
+        # Ensure home directory ownership
+        run_checked(["chroot", str(target), "chown", "-R", f"{args.user}:{args.user}", f"/home/{args.user}"], env=chroot_env)
+
+        # Remove live user 'os1' and live-only credentials
+        if subprocess.run(["chroot", str(target), "id", "-u", "os1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=chroot_env).returncode == 0:
+            subprocess.run(["chroot", str(target), "userdel", "-r", "os1"], env=chroot_env, check=False)
+
+        # Regenerate SSH host keys if OpenSSH server is installed
+        if (target / "etc" / "ssh" / "sshd_config").is_file():
+            for key_file in (target / "etc" / "ssh").glob("ssh_host_*"):
+                key_file.unlink(missing_ok=True)
+            subprocess.run(["chroot", str(target), "ssh-keygen", "-A"], env=chroot_env, check=False)
+
+        # === STAGE 10: Bootloader installation ===
+        print("[os1-install] Installing standalone x86-64 UEFI GRUB bootloader to ESP...", flush=True)
+        (target / "boot" / "grub").mkdir(parents=True, exist_ok=True)
+        (target / "boot" / "efi" / "EFI" / "BOOT").mkdir(parents=True, exist_ok=True)
+
+        grub_cfg = f"""insmod part_gpt
 insmod fat
 insmod ext2
-search --no-floppy --set=root --file /EFI/os1/vmlinuz-os1
+search --no-floppy --set=root --file /EFI/os1/{vmlinuz_versioned}
 
 serial --unit=0 --speed=115200
 terminal_input console serial
@@ -217,28 +576,70 @@ terminal_output console serial
 set default=0
 set timeout=2
 
-menuentry "OS-1 (${KERNEL_REL})" {
-    linux /EFI/os1/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
-}
+menuentry "OS-1 ({kernel_rel})" {{
+    linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+}}
 
-menuentry "OS-1 Single-User Recovery (${KERNEL_REL})" {
-    linux /EFI/os1/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
-}
-EOF
+menuentry "OS-1 Single-User Recovery ({kernel_rel})" {{
+    linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+}}
+"""
+        (target / "boot" / "grub" / "grub.cfg").write_text(grub_cfg, encoding="utf-8")
 
-chroot "${TARGET}" grub-mkstandalone \
-    --format=x86_64-efi \
-    --output=/boot/efi/EFI/BOOT/BOOTX64.EFI \
-    --locales="" \
-    --fonts="" \
-    "boot/grub/grub.cfg=/boot/grub/grub.cfg"
+        run_checked(
+            [
+                "chroot",
+                str(target),
+                "grub-mkstandalone",
+                "--format=x86_64-efi",
+                "--output=/boot/efi/EFI/BOOT/BOOTX64.EFI",
+                "--locales=",
+                "--fonts=",
+                "boot/grub/grub.cfg=/boot/grub/grub.cfg",
+            ],
+            env=chroot_env,
+        )
+        shutil.copyfile(
+            target / "boot" / "efi" / "EFI" / "BOOT" / "BOOTX64.EFI",
+            efi_os1_dir / "grubx64.efi",
+        )
 
-cp -f "${TARGET}/boot/efi/EFI/BOOT/BOOTX64.EFI" "${TARGET}/boot/efi/EFI/os1/grubx64.efi"
+        # === STAGE 12: Post-install validation ===
+        print("[os1-install] Running post-install validation...", flush=True)
+        for required_path in (
+            target / "boot" / "efi" / "EFI" / "BOOT" / "BOOTX64.EFI",
+            target / "boot" / "efi" / "EFI" / "os1" / vmlinuz_versioned,
+            target / "boot" / vmlinuz_versioned,
+            target / "etc" / "fstab",
+            target / "etc" / "os-release",
+            target / "etc" / "machine-id",
+            target / "home" / args.user,
+        ):
+            if not required_path.exists():
+                raise RuntimeError(f"Post-install validation failed: missing {required_path}")
 
-sync
-umount -R "${TARGET}"
-trap - EXIT
+        if (target / "etc" / "os1-live-mode").exists():
+            raise RuntimeError("Post-install validation failed: /etc/os1-live-mode still present")
+        if sddm_conf.is_file() and "[Autologin]" in sddm_conf.read_text(encoding="utf-8"):
+            raise RuntimeError("Post-install validation failed: live SDDM [Autologin] still present")
+        if not (target / "etc" / "machine-id").read_text(encoding="utf-8").strip():
+            raise RuntimeError("Post-install validation failed: /etc/machine-id is empty")
 
-echo "=== OS-1_INSTALL_COMPLETE ==="
-echo "[os1-install] Installed OS-1 to ${DISK} (ROOT_UUID=${ROOT_UUID}, EFI_UUID=${EFI_UUID})."
-echo "[os1-install] Remove the installation media and reboot."
+        uid_out = subprocess.check_output(["chroot", str(target), "id", "-u", args.user], text=True, env=chroot_env).strip()
+        if int(uid_out) <= 0:
+            raise RuntimeError(f"Post-install validation failed: invalid UID {uid_out} for {args.user}")
+
+        # === STAGE 13: Cleanup and final report ===
+        run_checked(["sync"])
+        cleanup_mounts()
+
+        print("=== OS-1_INSTALL_COMPLETE ===")
+        print(f"[os1-install] Installed OS-1 to {args.disk} (ROOT_UUID={root_uuid}, EFI_UUID={efi_uuid}).")
+        print("[os1-install] Remove the installation media and reboot.", flush=True)
+        return 0
+    finally:
+        cleanup_mounts()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

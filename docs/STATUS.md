@@ -21,8 +21,8 @@
 ## Phases 16–24 Mission Tracker
 
 - [x] **Phase 16 — CI Truthfulness & Test-Harness Repair (`54e10b3d2`):** Baseline audit written, `ci-integrity-test.py` enforced in `audit`, `os1-accessibility` DBus timeout bounded, `qemu-wayland-test.py` split into bounded steps with full failure diagnostics. Verified CI: Phase 1 (`44501470669` PASS), Phase 2 (`44501470566` PASS), Phase 4 (`44501470642` PASS), Phase 5 (`44501470555` PASS in 10m50s).
-- [ ] **Phase 17 — Firewall & Network-Security Correction:** Kernel `nf_tables`/`nft_compat`/`nf_conntrack`/xtables enabled, `ADR-firewall-backend.md` & `SECURITY_MODEL.md` added, UFW + `nftables` enabled for all profiles, `qemu-firewall-test.py` & installed-system runtime UFW/nftables gates added. *(Awaiting CI verification)*
-- [ ] **Phase 18 — Installer Safety, Credential Handling & System Identity:** Pending.
+- [ ] **Phase 17 — Firewall & Network-Security Correction (`962c03892` + HTTP probe fix):** Kernel `nf_tables`/`nft_compat`/`nf_conntrack`/xtables enabled (`ufw.service` active + `nft list ruleset` + outbound APT verified in run `44503292712`); fixed guest `http.server` one-liner in `qemu-firewall-test.py`. *(Awaiting full traffic-probe CI pass)*
+- [ ] **Phase 18 — Installer Safety, Credential Handling & System Identity:** 13-stage Python `os1-install` with `--plan`/`--dry-run`/`--json-plan`, stdin/fd password handling (zero argv/shell interpolation), reserved-username & `/etc/passwd` rejection, target-disk guards, live SDDM `[Autologin]` cleanup, `installer-safety-test.py` (27/27 PASS locally), and special-char password QEMU install test. *(Awaiting CI verification)*
 - [ ] **Phase 19 — Package Correctness & Package-Owned System Assembly:** Pending.
 - [ ] **Phase 20 — Signed Updates, Versioned Kernel Packages & Rollback:** Pending.
 - [ ] **Phase 21 — Installed Graphical Session, First-Boot State & Desktop Journeys:** Pending.

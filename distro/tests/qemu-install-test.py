@@ -207,64 +207,116 @@ def main() -> int:
     boot2_log = os.path.join(log_dir, "qemu-phase4-installed-boot2.log")
 
     token = "OS1-PHASE4-INSTALLED-PERSISTENCE-2026"
+    # Phase 18 special-character password (apostrophe, dollar sign, quotes, spaces, punctuation)
+    import base64
+    alice_pass = "O'Brien $100 \"safe\" & clean!"
+    alice_pass_b64 = base64.b64encode((alice_pass + "\n").encode("utf-8")).decode("ascii")
+    # Helper snippet that feeds alice's password to sudo -S without ever echoing it in serial log
+    sudo_alice = f"printf '%s' '{alice_pass_b64}' | base64 -d | sudo -S"
 
     try:
         # --- STEP 1: Boot Live ISO + Run Installer on Blank Disk ---
-        print(f"=== Phase 4/15 Step 1: Boot Live ISO & Install to Blank {disk_gb} GiB VM Disk ===", flush=True)
+        print(f"=== Phase 4/18 Step 1: Boot Live ISO & Install to Blank {disk_gb} GiB VM Disk ===", flush=True)
         vm_iso = UefiVm(ovmf_path, target_disk, install_log, iso_path=iso_path)
         try:
             vm_iso.login("os1", "os1", "os1")
 
-            # Negative safety check: must refuse without --confirm-erase-disk (rc=3)
+            # Authenticate sudo timestamp once so subsequent sudo -n calls leave stdin untouched for --password-stdin
+            vm_iso.run_cmd("printf 'os1\\n' | sudo -S -v", "SUDO_AUTH", timeout=20.0)
+
+            # Negative safety check 1: --password on argv must be rejected (rc=2)
+            vm_iso.run_cmd(
+                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password forbidden",
+                "NO_ARGV_PW",
+                timeout=30.0,
+                expect_rc="2",
+            )
+            print("[PASS][FUNC] Plaintext --password on argv rejected (rc=2)", flush=True)
+
+            # Negative safety check 2: reserved username 'root' must be rejected (rc=2)
+            vm_iso.run_cmd(
+                f"printf '%s' '{alice_pass_b64}' | base64 -d | "
+                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user root --password-stdin --dry-run",
+                "NO_ROOT_USER",
+                timeout=30.0,
+                expect_rc="2",
+            )
+            print("[PASS][FUNC] Reserved username 'root' rejected (rc=2)", flush=True)
+
+            # Negative safety check 3: must refuse without --confirm-erase-disk (rc=3)
             out = vm_iso.run_cmd(
-                "echo os1 | sudo -S /usr/local/sbin/os1-install --disk /dev/vda --user alice --password alicepass",
+                f"printf '%s' '{alice_pass_b64}' | base64 -d | "
+                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password-stdin",
                 "DRYRUN",
                 timeout=30.0,
                 expect_rc="3",
             )
             if "NONDESTRUCTIVE DEFAULT MODE" not in out:
                 raise RuntimeError(f"Expected nondestructive warning, got:\n{out}")
-            print("[PASS] Nondestructive default safety gate verified (rc=3)", flush=True)
+            print("[PASS][FUNC] Nondestructive default safety gate verified (rc=3)", flush=True)
 
-            # Real destructive installation with explicit consent
+            # Real destructive installation with explicit consent & special-char password via --password-stdin
             out = vm_iso.run_cmd(
-                "echo os1 | sudo -S /usr/local/sbin/os1-install --disk /dev/vda --user alice --password alicepass "
+                f"printf '%s' '{alice_pass_b64}' | base64 -d | "
+                "sudo -n /usr/local/sbin/os1-install --disk /dev/vda --user alice --password-stdin "
                 "--hostname os1-installed --timezone America/Los_Angeles --confirm-erase-disk",
                 "INSTALL",
                 timeout=600.0,
             )
             if "=== OS-1_INSTALL_COMPLETE ===" not in out:
                 raise RuntimeError(f"Install completion marker missing:\n{out}")
-            print("[PASS] OS-1 installed cleanly to /dev/vda", flush=True)
+            print("[PASS][E2E] OS-1 installed cleanly to /dev/vda with special-character password", flush=True)
 
             vm_iso.poweroff_and_wait("os1")
         finally:
             vm_iso.close()
 
+        # Verify plaintext password NEVER appeared in installer serial log
+        with open(install_log, "rb") as f:
+            inst_log_txt = f.read().decode("utf-8", errors="replace")
+        if alice_pass in inst_log_txt:
+            raise RuntimeError("SECURITY FAILURE: Plaintext user password leaked into installer log!")
+        print("[PASS][FUNC] Zero password leakage verified in installer log", flush=True)
+
         # --- STEP 2: Detach ISO! Boot Installed Disk via OVMF UEFI ---
-        print("=== Phase 4/15 Step 2: ISO Detached -> Boot Installed Disk, APT Update/Install, File Write ===", flush=True)
+        print("=== Phase 4/18 Step 2: ISO Detached -> Boot Installed Disk, APT Update/Install, File Write ===", flush=True)
         vm_inst1 = UefiVm(ovmf_path, target_disk, boot1_log, iso_path=None)
         try:
-            vm_inst1.login("os1-installed", "alice", "alicepass")
+            vm_inst1.login("os1-installed", "alice", alice_pass)
 
             out = vm_inst1.run_cmd(
                 "uname -r && test -d /sys/firmware/efi && echo UEFI_OK && "
                 "findmnt -n -o FSTYPE / && test ! -e /etc/os1-live-mode && echo NOT_LIVE && "
-                "cat /etc/timezone && grep '^ID=' /etc/os-release",
+                "cat /etc/timezone && grep '^ID=' /etc/os-release && "
+                "test -s /etc/machine-id && echo MACHINE_ID_OK && "
+                "(! id -u os1 >/dev/null 2>&1) && echo LIVE_USER_REMOVED && "
+                "if [ -f /etc/sddm.conf.d/10-os1-wayland.conf ]; then "
+                "  (! grep -q '\\[Autologin\\]' /etc/sddm.conf.d/10-os1-wayland.conf) && echo NO_AUTOLOGIN_OK; "
+                "else echo NO_AUTOLOGIN_OK; fi",
                 "INSTCHECK",
                 timeout=30.0,
             )
-            for needle in ("7.4.0-rc3-os1", "UEFI_OK", "ext4", "NOT_LIVE", "America/Los_Angeles", "ID=os1"):
+            for needle in (
+                "7.4.0-rc3-os1",
+                "UEFI_OK",
+                "ext4",
+                "NOT_LIVE",
+                "America/Los_Angeles",
+                "ID=os1",
+                "MACHINE_ID_OK",
+                "LIVE_USER_REMOVED",
+                "NO_AUTOLOGIN_OK",
+            ):
                 if needle not in out:
                     raise RuntimeError(f"Installed system check missing {needle!r}:\n{out}")
-            print("[PASS] Installed disk booted via UEFI on OS-1 kernel with ext4 root & custom config", flush=True)
+            print("[PASS][E2E] Installed disk booted via UEFI with special-char password, no live user, no SDDM autologin", flush=True)
 
             # Phase 17 mandatory runtime firewall gate on installed Boot 1
             fw_out = vm_inst1.run_cmd(
                 "test \"$(systemctl is-active ufw.service)\" = 'active' && "
                 "test \"$(systemctl is-failed ufw.service || true)\" != 'failed' && "
-                "printf 'alicepass\\n' | sudo -S ufw status verbose && "
-                "printf 'alicepass\\n' | sudo -S nft list ruleset",
+                f"{sudo_alice} ufw status verbose && "
+                f"{sudo_alice} nft list ruleset",
                 "UFW_BOOT1",
                 timeout=30.0,
             )
@@ -292,8 +344,8 @@ def main() -> int:
                 timeout=90.0,
             )
             vm_inst1.run_cmd(
-                "printf 'alicepass\\n' | sudo -S apt-get update && "
-                "printf 'alicepass\\n' | sudo -S env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq",
+                f"{sudo_alice} apt-get update && "
+                f"{sudo_alice} env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq",
                 "INSTAPT",
                 timeout=300.0,
             )
@@ -301,26 +353,42 @@ def main() -> int:
             vm_inst1.run_cmd(f"echo '{token}' > /home/alice/installed-proof.txt && sync", "INSTFILE", timeout=30.0)
             print("[PASS] Installed system updated APT, installed 'jq', and wrote persistent file", flush=True)
 
-            vm_inst1.poweroff_and_wait("alicepass")
+            vm_inst1.sendline(f"{sudo_alice} systemctl poweroff")
+            deadline = time.monotonic() + 120.0
+            while time.monotonic() < deadline:
+                vm_inst1._drain(0.2)
+                if vm_inst1.proc.poll() is not None:
+                    break
+            if vm_inst1.proc.poll() is None:
+                raise TimeoutError("Installed Boot 1 did not power off cleanly")
+            print("[PASS] Clean systemctl poweroff completed (rc=0)", flush=True)
         finally:
             vm_inst1.close()
 
         # --- STEP 3: Second Reboot of Installed Disk ---
-        print("=== Phase 4 Step 3: Second Reboot of Installed Disk (Persistence Proof) ===", flush=True)
+        print("=== Phase 4/18 Step 3: Second Reboot of Installed Disk (Persistence Proof) ===", flush=True)
         vm_inst2 = UefiVm(ovmf_path, target_disk, boot2_log, iso_path=None)
         try:
-            vm_inst2.login("os1-installed", "alice", "alicepass")
+            vm_inst2.login("os1-installed", "alice", alice_pass)
             out = vm_inst2.run_cmd(
                 "cat /home/alice/installed-proof.txt && jq --version && uname -r && "
                 "test \"$(systemctl is-active ufw.service)\" = 'active' && "
-                "printf 'alicepass\\n' | sudo -S ufw status verbose",
+                f"{sudo_alice} ufw status verbose",
                 "INSTPERSIST",
                 timeout=30.0,
             )
             if token not in out or "jq-" not in out or "7.4.0-rc3-os1" not in out or "Status: active" not in out:
                 raise RuntimeError(f"Second reboot persistence/firewall check failed:\n{out}")
             print("[PASS][E2E] Installed disk survived second reboot with file, 'jq', and active UFW firewall intact!", flush=True)
-            vm_inst2.poweroff_and_wait("alicepass")
+            vm_inst2.sendline(f"{sudo_alice} systemctl poweroff")
+            deadline = time.monotonic() + 120.0
+            while time.monotonic() < deadline:
+                vm_inst2._drain(0.2)
+                if vm_inst2.proc.poll() is not None:
+                    break
+            if vm_inst2.proc.poll() is None:
+                raise TimeoutError("Installed Boot 2 did not power off cleanly")
+            print("[PASS] Clean systemctl poweroff completed (rc=0)", flush=True)
         finally:
             vm_inst2.close()
 
@@ -334,7 +402,7 @@ def main() -> int:
                 print(f"ERROR: ufw.service failed during boot in {lp}", file=sys.stderr)
                 return 1
 
-        print("[os1-phase4-test] ALL PHASE 4 CLEAN-DISK INSTALL & REBOOT ASSERTIONS PASSED.", flush=True)
+        print("[os1-phase4-test] ALL PHASE 4/17/18 CLEAN-DISK INSTALL & REBOOT ASSERTIONS PASSED.", flush=True)
         return 0
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

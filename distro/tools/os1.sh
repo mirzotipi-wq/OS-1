@@ -25,7 +25,6 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
             "${REPO_ROOT}/distro/build/build-iso.sh" \
             "${REPO_ROOT}/distro/packages/build-debs.sh" \
-            "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/installer/os1-firstboot" \
             "${REPO_ROOT}/distro/shell/bin/os1-appearance" \
             "${REPO_ROOT}/distro/shell/bin/os1-shell-init" \
@@ -40,7 +39,9 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/branding/generate-assets.py" \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/build/generate-sbom.py" \
+            "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
+            "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
@@ -52,6 +53,8 @@ case "${cmd}" in
         done
         echo "CI workflow integrity check:"
         python3 "${REPO_ROOT}/distro/tests/ci-integrity-test.py"
+        echo "Installer preflight & credential safety check:"
+        python3 "${REPO_ROOT}/distro/tests/installer-safety-test.py"
         echo "Disk space:"
         df -h "${REPO_ROOT}"
         ;;
