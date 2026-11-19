@@ -79,5 +79,5 @@ jobs:
           retention-days: 7
           path: |
             distro/out/images/rootfs-provenance.json
-            distro/out/screenshots/phase5-wayland-desktop.png
+            distro/out/screenshots/*.png
             distro/out/logs/qemu-phase5-wayland.log

@@ -2,19 +2,18 @@
 
 ## Current Verified State (2026-11-19)
 
-- **Phases 0, 1, 2, 3, 4, and 5:** **PASS** (all CI-verified on real GitHub Actions x86-64 runners).
-- **Phase 5 Evidence:** CI run `https://github.com/mirzotipi-wq/OS-1/actions/runs/44482048774` (6m21s, PASS):
-  - Built Debian 12 `bookworm` desktop rootfs (`OS1_PROFILE=desktop`, 948 packages, 6144 MiB ext4 image).
-  - Booted with in-repo OS-1 kernel (`7.4.0-rc3-os1`) in QEMU (`virtio-vga,xres=1440,yres=900`, `intel-hda`, `virtio-net-pci`, `-cpu Haswell` TCG).
-  - Verified `sddm.service`, `kwin_wayland`, `/run/user/1000/wayland-0`, live `plasmashell`, `pipewire`/`pipewire-pulse`, `konsole 22.12.3`, `dolphin 22.12.3`, `firefox-esr 140.12.0esr`.
-  - Launched `konsole` inside live Wayland session, captured & visually verified real `1440×900` framebuffer screenshot (`phase5-wayland-desktop.png`), clean poweroff with zero panics.
+- **Phases 0–7:** **PASS** (all CI-verified on real GitHub Actions x86-64 runners).
+- **Phases 6 & 7 Evidence:** CI run `https://github.com/mirzotipi-wq/OS-1/actions/runs/44486494590` (10m06s, PASS):
+  - Original OS-1 branding (`tokens.json`, `OS1Horizon` Light/Dark wallpapers, `os1-logo.svg`, `OS1Sequoia` left-aligned traffic-light window controls, `OS1Light`/`OS1Dark` color schemes, `org.os1.desktop` Look-and-Feel) installed and registered in `docs/LEGAL_AND_LICENSES.md` (zero Apple IP).
+  - 28px Top Menu Bar (OS-1 logo menu, Global App Menu, System Tray, macOS-style `Thu Nov 19 8:26 AM` clock) and centered Floating Bottom Dock (`icontasks` + `trash`) visually verified in real `1440×900` QEMU framebuffer screenshots.
 
 ## Exact Next Step
 
-- Branch from `master` to `os1/phase6-7-design-and-shell` (or sequential branches for Phases 6 & 7).
-- **Phase 6 (Visual Design System & OS-1 Identity):**
-  - Original, redistributable OS-1 branding under `distro/branding/`: design tokens (`tokens.json`), original SVG/PNG wallpapers (Light & Dark), original OS-1 emblem/icons, Plasma Look-and-Feel (`org.os1.desktop`), Light/Dark Plasma color schemes (`OS1Light.colors`, `OS1Dark.colors`), KWin left-aligned traffic-light window controls (`XIA` / close-minimize-maximize on left), rounded corners, blur/translucency, and OFL font stack.
-  - Register every original asset in `docs/LEGAL_AND_LICENSES.md`.
-- **Phase 7 (Top Menu Bar & Floating Dock):**
-  - Plasma shell layout (`distro/shell/`) implementing a translucent 28px macOS Sequoia-style top Menu Bar (OS-1 system menu, active app menu, clock, status/control icons) and floating translucent bottom Dock (Finder/Dolphin, Launchpad, Firefox, Terminal/Konsole, Notes/Kate, System Settings, Trash, running-app indicators).
-- Verify in QEMU at `1440×900` (Light & Dark) and `1920×1080`, download and visually inspect the real framebuffer screenshots.
+- Branch from `master` to `os1/phase8-12-desktop-experience`:
+  - Polish Dock `icontasks` pinned launcher icon list (comma-separated desktop URLs) and Dark-mode screenshot timing.
+  - **Phase 8:** Finder-class Dolphin defaults (`/etc/xdg/dolphinrc`) + automated filesystem operations test suite (`distro/tests/fs-operations-test.py`: copy, move, rename, trash, restore, symlinks, Unicode filenames, large files, permission errors).
+  - **Phase 9:** Launchpad/App Grid, Spotlight search (`Super+Space` -> KRunner), Mission Control/Overview (`Super+Up`) + virtual desktops/Spaces (`/etc/xdg/kglobalshortcutsrc`).
+  - **Phase 10:** First-run onboarding wizard (`distro/installer/os1-firstboot`), notification & quick controls verification, persistent settings.
+  - **Phase 11:** Essential native apps manifest & smoke verification (`dolphin`, `konsole`, `firefox-esr`, `kate`, `gwenview`, `okular`, `kcalc`, `ark`, `kde-spectacle`, `plasma-systemmonitor`, `systemsettings`).
+  - **Phase 12:** macOS Sequoia interaction & keyboard shortcut matrix (`docs/INTERACTION_MATRIX.md`) + `os1-accessibility` reduced-motion/reduced-transparency toggles.
+- Then **Phases 13–15:** Native `.deb` packaging (`distro/packages/`), SBOM generator, security hardening (`ufw` / firewall defaults), Full Desktop UEFI Live ISO (`OS1_PROFILE=desktop`), clean-install + reboot qualification, and final release scorecard.

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Switch OS-1 desktop appearance between Light and Dark themes live.
+set -euo pipefail
+
+mode="${1:-}"
+case "${mode}" in
+    light)
+        plasma-apply-colorscheme OS1Light
+        plasma-apply-wallpaperimage /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png
+        echo "[os1-appearance] Switched to OS-1 Light"
+        ;;
+    dark)
+        plasma-apply-colorscheme OS1Dark
+        plasma-apply-wallpaperimage /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080-dark.png
+        echo "[os1-appearance] Switched to OS-1 Dark"
+        ;;
+    *)
+        echo "Usage: os1-appearance <light|dark>" >&2
+        exit 2
+        ;;
+esac

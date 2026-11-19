@@ -1,0 +1,18 @@
+{
+  "KPlugin": {
+    "Authors": [
+      {
+        "Name": "OS-1 Project"
+      }
+    ],
+    "Category": "",
+    "Description": "OS-1 Desktop Look and Feel (macOS Sequoia-inspired layout, original OS-1 identity)",
+    "Id": "org.os1.desktop",
+    "License": "GPL-2.0-only",
+    "Name": "OS-1 Desktop",
+    "ServiceTypes": [
+      "Plasma/LookAndFeel"
+    ],
+    "Version": "1.0"
+  }
+}

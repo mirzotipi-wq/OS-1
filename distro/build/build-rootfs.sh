@@ -67,6 +67,8 @@ DESKTOP_PACKAGES=(
     breeze-icon-theme
     qml-module-org-kde-qqc2desktopstyle
     qtwayland5
+    libqt5svg5
+    systemsettings
     xkb-data
     xwayland
     xserver-xorg-core
@@ -318,6 +320,31 @@ systemctl enable sddm.service
 systemctl set-default graphical.target
 fc-cache -f || true
 "
+
+    # Phase 6 & 7: Install original OS-1 visual identity, wallpapers, Aurorae theme, Look-and-Feel, and Top Bar + Dock shell layout
+    echo "[os1-rootfs] Installing OS-1 branding (Phase 6) and Top Menu Bar + Dock shell layout (Phase 7)..."
+    python3 "${REPO_ROOT}/distro/branding/generate-assets.py" "${ROOTFS_DIR}/usr/share"
+
+    mkdir -p "${ROOTFS_DIR}/usr/share/color-schemes"
+    install -m 0644 "${REPO_ROOT}/distro/branding/color-schemes/OS1Light.colors" "${ROOTFS_DIR}/usr/share/color-schemes/OS1Light.colors"
+    install -m 0644 "${REPO_ROOT}/distro/branding/color-schemes/OS1Dark.colors" "${ROOTFS_DIR}/usr/share/color-schemes/OS1Dark.colors"
+
+    mkdir -p "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts"
+    install -m 0644 "${REPO_ROOT}/distro/branding/look-and-feel/org.os1.desktop/metadata.json" \
+        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/metadata.json"
+    install -m 0644 "${REPO_ROOT}/distro/branding/look-and-feel/org.os1.desktop/contents/defaults" \
+        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/defaults"
+    install -m 0644 "${REPO_ROOT}/distro/shell/layout/org.kde.plasma.desktop-layout.js" \
+        "${ROOTFS_DIR}/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js"
+
+    mkdir -p "${ROOTFS_DIR}/etc/xdg/autostart" "${ROOTFS_DIR}/usr/share/os1" "${ROOTFS_DIR}/usr/local/bin"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kdeglobals" "${ROOTFS_DIR}/etc/xdg/kdeglobals"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kwinrc" "${ROOTFS_DIR}/etc/xdg/kwinrc"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/autostart/os1-shell-firstboot.desktop" \
+        "${ROOTFS_DIR}/etc/xdg/autostart/os1-shell-firstboot.desktop"
+    install -m 0644 "${REPO_ROOT}/distro/branding/tokens.json" "${ROOTFS_DIR}/usr/share/os1/tokens.json"
+    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-appearance" "${ROOTFS_DIR}/usr/local/bin/os1-appearance"
+    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-shell-init" "${ROOTFS_DIR}/usr/local/bin/os1-shell-init"
 fi
 
 # Install OS-1 UEFI system installer into rootfs
