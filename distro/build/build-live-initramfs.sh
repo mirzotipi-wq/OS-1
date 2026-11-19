@@ -42,6 +42,7 @@ export PATH=/bin:/sbin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t tmpfs -o mode=0755 tmpfs /run
 
 echo "=== OS-1_LIVE_INITRAMFS_START ==="
 echo "OS-1_CMDLINE: $(cat /proc/cmdline)"
@@ -87,9 +88,9 @@ mount -t overlay overlay -o "lowerdir=/run/live/ro,upperdir=/run/live/rw/upper,w
     exec /bin/sh
 }
 
-# Preserve /run/live inside /newroot so installer and diagnostics can inspect live media
-mkdir -p /newroot/run/live
-mount --move /run/live /newroot/run/live 2>/dev/null || true
+# Move /run (a tmpfs mountpoint) into /newroot/run so systemd preserves /run/live/{medium,ro}
+mkdir -p /newroot/run
+mount --move /run /newroot/run 2>/dev/null || true
 
 # Write live mode marker & neutralize /etc/fstab root mount for live session
 echo "live" > /newroot/etc/os1-live-mode
