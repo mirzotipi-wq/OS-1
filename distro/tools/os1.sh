@@ -24,6 +24,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-live-initramfs.sh" \
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
             "${REPO_ROOT}/distro/build/build-iso.sh" \
+            "${REPO_ROOT}/distro/installer/os1-install" \
             "${REPO_ROOT}/distro/tests/qemu-serial-boot.sh" \
             "${REPO_ROOT}/distro/tools/os1.sh"; do
             bash -n "${f}"
@@ -33,7 +34,8 @@ case "${cmd}" in
         for f in \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
-            "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py"; do
+            "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-install-test.py"; do
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
@@ -60,6 +62,9 @@ case "${cmd}" in
         ;;
     iso-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" "$@"
+        ;;
+    install-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-install-test.py" "$@"
         ;;
     clean)
         echo "[os1] Removing ephemeral build outputs: ${OUT_ROOT}"
