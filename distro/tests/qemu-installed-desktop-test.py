@@ -195,13 +195,39 @@ class QemuVM:
             time.sleep(0.12)
         self.monitor_cmd("sendkey ret")
 
-    def screenshot(self, ppm_path: str, png_path: str) -> tuple[int, int, int]:
-        self.monitor_cmd(f"screendump {ppm_path}")
-        for _ in range(30):
-            if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) > 10000:
-                break
-            time.sleep(0.2)
-        return ppm_to_png_and_validate(ppm_path, png_path)
+    def screenshot(self, ppm_path: str, png_path: str, max_attempts: int = 12) -> tuple[int, int, int]:
+        last_err: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            if os.path.exists(ppm_path):
+                os.unlink(ppm_path)
+            self.monitor_cmd("mouse_move 25 25")
+            time.sleep(2.0)
+            self.monitor_cmd(f"screendump {ppm_path}")
+            for _ in range(30):
+                if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) > 10000:
+                    break
+                time.sleep(0.2)
+            try:
+                return ppm_to_png_and_validate(ppm_path, png_path)
+            except AssertionError as exc:
+                last_err = exc
+                print(
+                    f"[os1-phase21] Framebuffer attempt {attempt}/{max_attempts} not ready yet: {exc}",
+                    flush=True,
+                )
+                time.sleep(3.0)
+        # Capture SDDM / Xorg diagnostics before failing
+        try:
+            self.run_cmd(
+                "journalctl -u sddm -n 40 --no-pager; tail -n 30 /var/log/Xorg.0.log 2>/dev/null || true",
+                "SDDM_DIAG",
+                timeout=20.0,
+                expect_rc=None,
+            )
+        except Exception:
+            pass
+        assert last_err is not None
+        raise last_err
 
 
 def main() -> int:
