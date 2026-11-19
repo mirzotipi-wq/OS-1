@@ -59,6 +59,8 @@ if [[ -f "${KERNEL_PROV}" ]]; then
 fi
 
 cat > "${ISO_WORK}/boot/grub/grub.cfg" <<EOF
+search --no-floppy --set=root --file /live/filesystem.squashfs
+
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
@@ -78,19 +80,12 @@ menuentry "OS-1 Recovery Mode (${KERNEL_REL})" {
 EOF
 
 echo "[os1-iso] Generating standalone x86-64 UEFI GRUB image (BOOTX64.EFI)..."
-GRUB_EMBED_CFG="${OUT_ROOT}/grub-early.cfg"
-cat > "${GRUB_EMBED_CFG}" <<'EOF'
-search --no-floppy --set=root --file /live/filesystem.squashfs
-set prefix=($root)/boot/grub
-configfile /boot/grub/grub.cfg
-EOF
-
 grub-mkstandalone \
     --format=x86_64-efi \
     --output="${ISO_WORK}/EFI/BOOT/BOOTX64.EFI" \
     --locales="" \
     --fonts="" \
-    "boot/grub/grub.cfg=${GRUB_EMBED_CFG}"
+    "boot/grub/grub.cfg=${ISO_WORK}/boot/grub/grub.cfg"
 
 echo "[os1-iso] Creating FAT EFI System Partition image (efiboot.img)..."
 EFI_IMG="${ISO_WORK}/boot/grub/efiboot.img"
