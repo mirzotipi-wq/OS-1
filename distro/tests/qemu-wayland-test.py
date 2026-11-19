@@ -343,11 +343,45 @@ def main() -> int:
             )
             print("[PASS] Phase 6 OS-1 branding & Phase 7 Top Menu Bar + Floating Dock layout verified", flush=True)
 
-            # Capture real QEMU framebuffer screenshot in OS-1 Light mode (retry while TCG finishes painting)
+            # Phase 8: Automated Finder-class filesystem operations suite inside live OS-1 VM
+            vm.run_cmd("os1-fs-test", "FS_TEST", timeout=60.0)
+            print("[PASS] Phase 8 automated filesystem suite (copy/move/Trash+restore/symlinks/Unicode/16MiB/EACCES) passed", flush=True)
+
+            # Phase 9 & 11: Verify Spotlight/Overview shortcuts and all 11 essential native apps from manifest
+            vm.run_cmd(
+                "grep -q 'Meta+Space' /etc/xdg/kglobalshortcutsrc && "
+                "grep -q 'Meta+Up' /etc/xdg/kglobalshortcutsrc && "
+                "test -f /etc/xdg/krunnerrc && test -f /etc/xdg/dolphinrc && "
+                "python3 -c \"import json, shutil; "
+                "m=json.load(open('/usr/share/os1/apps-manifest.json')); "
+                "missing=[a['binary'] for a in m['apps'] if not shutil.which(a['binary'])]; "
+                "assert not missing, f'Missing apps: {missing}'; "
+                "print('Verified', len(m['apps']), 'native apps')\"",
+                "APPS_MANIFEST",
+                timeout=30.0,
+            )
+            print("[PASS] Phase 9 Spotlight/Overview shortcuts & Phase 11 native apps manifest (11/11) verified", flush=True)
+
+            # Phase 10 & 12: Verify Notification Center, NetworkManager/UPower, accessibility toggles & onboarding
+            vm.run_cmd(
+                "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+                "notify-send 'OS-1' 'Phase 10 Notification Center verified' && "
+                "nmcli general status >/dev/null && "
+                "upower -e >/dev/null && "
+                "os1-accessibility reduced-motion on && "
+                "os1-accessibility status | grep -q 'AnimationDurationFactor=0' && "
+                "os1-accessibility reduced-motion off",
+                "CONTROLS_A11Y",
+                timeout=30.0,
+            )
+            print("[PASS] Phase 10 Notifications/Controls & Phase 12 Accessibility reduced-motion verified", flush=True)
+
+            # Allow panels & Dock pinned launchers to finish painting on TCG, then capture Light screenshot
+            time.sleep(10.0)
             w, h, ratio = 0, 0, 0.0
             for attempt in range(1, 7):
                 vm.monitor_cmd("mouse_move 25 25")
-                time.sleep(5.0)
+                time.sleep(4.0)
                 vm.monitor_cmd(f"screendump {ppm_path}")
                 if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) >= 1000:
                     w, h, ratio = ppm_to_png_and_check_nonblack(ppm_path, png_path)
@@ -363,17 +397,19 @@ def main() -> int:
                 raise RuntimeError(f"Light desktop screenshot under-rendered (non-black={ratio:.2%}, expected >= 20%)")
             print(f"[PASS] Captured OS-1 Light desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
 
-            # Switch live to OS-1 Dark appearance and capture Dark desktop screenshot
+            # Phase 10 onboarding + Dark appearance live switch & Dark screenshot
             dark_png_path = os.path.join(shot_dir, "phase6-7-os1-dark-desktop.png")
             vm.run_cmd(
                 "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
-                "QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 os1-appearance dark",
+                "QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 "
+                "os1-firstboot --apply --appearance dark --reduced-motion off && "
+                "grep -q 'completed=true' /home/os1/.config/os1-onboarding.conf",
                 "DARK_MODE",
-                timeout=30.0,
+                timeout=45.0,
             )
-            time.sleep(6.0)
+            time.sleep(10.0)
             vm.monitor_cmd("mouse_move 10 10")
-            time.sleep(2.0)
+            time.sleep(3.0)
             vm.monitor_cmd(f"screendump {ppm_path}")
             dw, dh, dratio = ppm_to_png_and_check_nonblack(ppm_path, dark_png_path)
             print(f"[PASS] Captured OS-1 Dark desktop screenshot: {dark_png_path} ({dw}x{dh}, non-black={dratio:.1%})", flush=True)

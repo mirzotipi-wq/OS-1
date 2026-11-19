@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Phase 12/13 accessibility toggles for OS-1 (reduced motion, reduced transparency).
+set -euo pipefail
+
+cmd="${1:-status}"
+val="${2:-}"
+
+case "${cmd}" in
+    reduced-motion)
+        if [[ "${val}" == "on" ]]; then
+            kwriteconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor 0
+            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            echo "[os1-accessibility] reduced-motion=on (AnimationDurationFactor=0)"
+        elif [[ "${val}" == "off" ]]; then
+            kwriteconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor 1
+            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            echo "[os1-accessibility] reduced-motion=off (AnimationDurationFactor=1)"
+        else
+            echo "Usage: os1-accessibility reduced-motion <on|off>" >&2
+            exit 2
+        fi
+        ;;
+    reduced-transparency)
+        if [[ "${val}" == "on" ]]; then
+            kwriteconfig5 --file kwinrc --group Plugins --key blurEnabled false
+            kwriteconfig5 --file kwinrc --group Plugins --key contrastEnabled false
+            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            echo "[os1-accessibility] reduced-transparency=on (blurEnabled=false)"
+        elif [[ "${val}" == "off" ]]; then
+            kwriteconfig5 --file kwinrc --group Plugins --key blurEnabled true
+            kwriteconfig5 --file kwinrc --group Plugins --key contrastEnabled true
+            qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+            echo "[os1-accessibility] reduced-transparency=off (blurEnabled=true)"
+        else
+            echo "Usage: os1-accessibility reduced-transparency <on|off>" >&2
+            exit 2
+        fi
+        ;;
+    status)
+        anim="$(kreadconfig5 --file kdeglobals --group KDE --key AnimationDurationFactor --default 1)"
+        blur="$(kreadconfig5 --file kwinrc --group Plugins --key blurEnabled --default true)"
+        echo "AnimationDurationFactor=${anim}"
+        echo "blurEnabled=${blur}"
+        ;;
+    *)
+        echo "Usage: os1-accessibility <status|reduced-motion <on|off>|reduced-transparency <on|off>>" >&2
+        exit 2
+        ;;
+esac

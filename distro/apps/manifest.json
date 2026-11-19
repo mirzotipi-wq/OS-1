@@ -1,0 +1,17 @@
+{
+  "project": "OS-1",
+  "phase": 11,
+  "apps": [
+    { "role": "Files (Finder-class)", "binary": "dolphin", "desktop": "org.kde.dolphin.desktop", "dockPinned": true },
+    { "role": "Web Browser", "binary": "firefox-esr", "desktop": "firefox-esr.desktop", "dockPinned": true },
+    { "role": "Terminal", "binary": "konsole", "desktop": "org.kde.konsole.desktop", "dockPinned": true },
+    { "role": "Text Editor & Notes", "binary": "kate", "desktop": "org.kde.kate.desktop", "dockPinned": true },
+    { "role": "Photos & Image Viewer", "binary": "gwenview", "desktop": "org.kde.gwenview.desktop", "dockPinned": true },
+    { "role": "PDF & Document Viewer", "binary": "okular", "desktop": "org.kde.okular.desktop", "dockPinned": false },
+    { "role": "Calculator", "binary": "kcalc", "desktop": "org.kde.kcalc.desktop", "dockPinned": true },
+    { "role": "Archive Manager", "binary": "ark", "desktop": "org.kde.ark.desktop", "dockPinned": false },
+    { "role": "Screenshot & Capture", "binary": "spectacle", "desktop": "org.kde.spectacle.desktop", "dockPinned": false },
+    { "role": "Activity / Process Monitor", "binary": "plasma-systemmonitor", "desktop": "org.kde.plasma-systemmonitor.desktop", "dockPinned": false },
+    { "role": "System Settings", "binary": "systemsettings", "desktop": "systemsettings.desktop", "dockPinned": true }
+  ]
+}
