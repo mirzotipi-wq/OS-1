@@ -554,9 +554,9 @@ def main() -> int:
                 vm.run_cmd(
                     f"curl -fsSL http://10.0.2.2:{port_s}/os1-tools_{v2_ver}_all.deb -o /tmp/os1-tools.deb && "
                     "sudo -n dpkg --unpack /tmp/os1-tools.deb && "
-                    "test -n \"$(dpkg --audit)\" && "
+                    "test -n \"$(sudo -n dpkg --audit)\" && "
                     "sudo -n dpkg --configure -a && "
-                    "test -z \"$(dpkg --audit)\" && "
+                    "test -z \"$(sudo -n dpkg --audit)\" && "
                     "rm -f /tmp/os1-tools.deb",
                     "INTERRUPTED_RECOVERY",
                     timeout=60.0,
@@ -572,15 +572,16 @@ def main() -> int:
                 os.path.join(LOG_DIR, "qemu-phase20-boot4-clean.log"),
             ) as vm:
                 vm.login("alice", "os1pass20", timeout=240.0)
+                vm.run_cmd("printf 'os1pass20\\n' | sudo -S -v", "SUDO4", timeout=20.0)
                 vm.run_cmd(
                     f"grep -q 'BOOT_IMAGE=/boot/vmlinuz-{krel_b}' /proc/cmdline && "
-                    "test -z \"$(dpkg --audit)\" && "
+                    "test -z \"$(sudo -n dpkg --audit)\" && "
                     "systemctl is-active ufw.service",
                     "FINAL_HEALTH",
                     timeout=30.0,
                 )
                 print("[PASS][P20] Clean automatic reboot into Known-Good Kernel B verified", flush=True)
-                vm.sendline("printf 'os1pass20\\n' | sudo -S poweroff")
+                vm.sendline("sudo -n poweroff")
                 vm.proc.wait(timeout=60)
 
         finally:
