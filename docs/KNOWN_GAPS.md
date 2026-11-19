@@ -1,23 +1,20 @@
-# OS-1 Known Gaps & Honest Limitations
+# OS-1 Known Gaps, Limitations & Human-Gated Items
 
-## 1. Distribution Components That Do NOT Yet Exist (Post-Phase 0 Audit)
+In accordance with OS-1's honesty and engineering discipline, this file records every known limitation, platform difference, and item requiring physical hardware or human review outside automated cloud CI.
 
-As of baseline commit `666539eecdf4db623f5e3c3e55cf9f2dfad24aa4`, this repository contains **only** the upstream Linux `7.4.0-rc3` kernel source tree plus Phase 0–1 scaffolding. None of the following exist yet:
+## 1. Hardware-Gated Items (Require Physical PCs Outside Cloud VM)
 
-- **Userspace OS (Phase 2):** No Debian rootfs image, `systemd` init, PAM/login, `NetworkManager`, `PipeWire`, APT configuration, or persistent writable disk image.
-- **Bootable Live ISO (Phase 3):** No UEFI GRUB/systemd-boot image, SquashFS rootfs, live boot menu, or recovery mode.
-- **System Installer (Phase 4):** No Calamares integration, disk partitioning UI, bootloader installation, or first-user setup.
-- **Graphical Wayland Desktop (Phase 5):** No KDE Plasma/KWin Wayland session, SDDM/display manager, Mesa/GPU acceleration tests, or XWayland integration.
-- **OS-1 Visual Identity & macOS-Reference UI (Phases 6–12):** No original icon set, typography bundle, wallpapers, light/dark theme tokens, top menu bar, Dock, Finder-class file manager, Launchpad app grid, Spotlight search, Mission Control overview, System Settings, notification center, or macOS-like keyboard/touchpad bindings.
-- **Hardware Support & Release Security (Phases 13–15):** No physical Intel/AMD hardware test matrix, Wi-Fi/Bluetooth/suspend validation, signed APT repository, SBOM automation, or Secure Boot signing plan.
+- **Physical Intel / AMD GPU Acceleration:** CI verifies `virtio-gpu` + Mesa `llvmpipe` software fallback (`10-os1-gpu-env` activates software rendering only when `/dev/dri/renderD*` is absent). Bare-metal validation on physical Intel (`i915`) and AMD (`amdgpu`) laptops/desktops (including Wi-Fi, Bluetooth, webcam, external HDMI/DP hotplug, lid suspend/resume, and battery drain) requires physical hardware.
+- **HiDPI (`200%`) & Multi-Monitor Physical Testing:** CI verifies `1440×900` Light and Dark Wayland rendering in QEMU; physical Retina/4K HiDPI scaling and multi-monitor hotplug require physical display testing.
+- **ARM64:** Explicitly deferred per ADR-0001 until an ARM64 support plan and test hardware exist.
 
-## 2. Permanent Platform & Legal Limitations
+## 2. Human Release & Legal Gates
 
-- **Not macOS:** OS-1 is a GNU/Linux distribution. It does **not** natively execute arbitrary macOS `.app` bundles, Darwin/Mach binaries, Apple Cocoa/AppKit/Metal frameworks, iMessage, FaceTime, AirDrop, iCloud, or Apple ID services.
-- **Toolkit Menu/Shortcut Parity:** Under Linux/Wayland, some GTK, Electron, and XWayland applications do not export DBus global menus or respect identical macOS-style `Cmd` (`Super`) shortcuts. These gaps will be tracked per-app in Phase 7 and Phase 12.
-- **No Apple Assets:** OS-1 will never ship Apple fonts (SF Pro), icons, sounds, wallpapers, or trademarks. Visual fidelity is achieved through original, legally redistributable assets.
+- **Kernel Release Candidate Policy:** The repository kernel is upstream Linux `7.4.0-rc3` (`7.4.0-rc3-os1`). Before a public end-user "Stable" release, a human maintainer should decide whether to rebase onto a final stable Linux release tag or maintain an LTS kernel option alongside `7.4.0-rc3-os1`.
+- **GPG Key Signing for Public APT Repo & GitHub Releases:** `distro/packages/build-debs.sh` generates standards-compliant APT `Packages`, `Packages.gz`, `Release`, and `SHA256SUMS`. Signing `InRelease`/`Release.gpg` with a private GPG release key is intentionally left to a human release manager (never store private signing keys in Git).
+- **Legal / Trade-Dress Review:** All OS-1 assets (`OS1Horizon` wallpapers, `os1-logo.svg`, `OS1Sequoia` Aurorae theme, color schemes, shell configs) are 100% independently created with zero Apple IP, and open fonts (`Noto`, `DejaVu`, `Liberation`) are used. A human legal review is recommended before public marketing or distribution.
 
-## 3. Environment & Tooling Gaps
+## 3. Platform Scope Realities
 
-- **Kernel RC Status:** `Makefile` is at `7.4.0-rc3` (release candidate). Release candidates can exhibit regressions on physical hardware or filesystems; stability testing and a future move to `7.4` final or an LTS branch are tracked in [`decisions/ADR-0002-kernel-rc-strategy.md`](decisions/ADR-0002-kernel-rc-strategy.md).
-- **Sandbox Execution Limits:** The ephemeral development VM lacks `sudo`/`apt`, `bc`, `libelf-dev`, `cpio`, `qemu-system-x86_64`, and `/dev/kvm`. Full kernel compilation and QEMU serial boot verification are therefore automated and executed via GitHub Actions (`ubuntu-latest`) as well as supported on any standard Linux dev host with those packages installed.
+- OS-1 is a genuine GNU/Linux desktop distribution (`Debian 12 bookworm` userspace + `7.4.0-rc3-os1` kernel + KDE Plasma 5.27 / KWin Wayland). It does not natively execute proprietary macOS `.app` bundles, Apple frameworks, iMessage, FaceTime, AirDrop, or Apple ID services.
+- Installer UX: `os1-install` provides a deterministic, nondestructive-by-default UEFI GPT installer verified end-to-end in CI. A graphical Calamares frontend can be layered on top of `os1-install` in a future minor release if desired.

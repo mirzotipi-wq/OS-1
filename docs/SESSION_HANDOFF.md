@@ -1,19 +1,48 @@
-# OS-1 Session Handoff
+# OS-1 Session Handoff & Reproduction Guide
 
-## Current Verified State (2026-11-19)
+- **Last Updated (UTC):** 2026-11-19
+- **Repository:** `https://github.com/mirzotipi-wq/OS-1.git`
+- **Branch:** `master`
+- **Status:** **OS-1 1.0-rc1 — Phases 0–15 COMPLETE & CI-VERIFIED**
 
-- **Phases 0–7:** **PASS** (all CI-verified on real GitHub Actions x86-64 runners).
-- **Phases 6 & 7 Evidence:** CI run `https://github.com/mirzotipi-wq/OS-1/actions/runs/44486494590` (10m06s, PASS):
-  - Original OS-1 branding (`tokens.json`, `OS1Horizon` Light/Dark wallpapers, `os1-logo.svg`, `OS1Sequoia` left-aligned traffic-light window controls, `OS1Light`/`OS1Dark` color schemes, `org.os1.desktop` Look-and-Feel) installed and registered in `docs/LEGAL_AND_LICENSES.md` (zero Apple IP).
-  - 28px Top Menu Bar (OS-1 logo menu, Global App Menu, System Tray, macOS-style `Thu Nov 19 8:26 AM` clock) and centered Floating Bottom Dock (`icontasks` + `trash`) visually verified in real `1440×900` QEMU framebuffer screenshots.
+## Quick Reproduction Commands (Linux Host or CI Runner)
 
-## Exact Next Step
+```bash
+# 1. Audit repository, script syntax, and disk space
+./distro/tools/os1.sh audit
 
-- Branch from `master` to `os1/phase8-12-desktop-experience`:
-  - Polish Dock `icontasks` pinned launcher icon list (comma-separated desktop URLs) and Dark-mode screenshot timing.
-  - **Phase 8:** Finder-class Dolphin defaults (`/etc/xdg/dolphinrc`) + automated filesystem operations test suite (`distro/tests/fs-operations-test.py`: copy, move, rename, trash, restore, symlinks, Unicode filenames, large files, permission errors).
-  - **Phase 9:** Launchpad/App Grid, Spotlight search (`Super+Space` -> KRunner), Mission Control/Overview (`Super+Up`) + virtual desktops/Spaces (`/etc/xdg/kglobalshortcutsrc`).
-  - **Phase 10:** First-run onboarding wizard (`distro/installer/os1-firstboot`), notification & quick controls verification, persistent settings.
-  - **Phase 11:** Essential native apps manifest & smoke verification (`dolphin`, `konsole`, `firefox-esr`, `kate`, `gwenview`, `okular`, `kcalc`, `ark`, `kde-spectacle`, `plasma-systemmonitor`, `systemsettings`).
-  - **Phase 12:** macOS Sequoia interaction & keyboard shortcut matrix (`docs/INTERACTION_MATRIX.md`) + `os1-accessibility` reduced-motion/reduced-transparency toggles.
-- Then **Phases 13–15:** Native `.deb` packaging (`distro/packages/`), SBOM generator, security hardening (`ufw` / firewall defaults), Full Desktop UEFI Live ISO (`OS1_PROFILE=desktop`), clean-install + reboot qualification, and final release scorecard.
+# 2. Build the in-repo OS-1 kernel (7.4.0-rc3-os1)
+./distro/tools/os1.sh kernel
+
+# 3. Build native OS-1 .deb packages & local APT repository
+./distro/tools/os1.sh debs
+
+# 4. Build full OS-1 Wayland Desktop rootfs & bootable x86-64 UEFI Live ISO (843 MiB)
+sudo OS1_PROFILE=desktop OS1_DESKTOP_AUTOLOGIN=1 ./distro/tools/os1.sh rootfs
+sudo ./distro/tools/os1.sh iso
+
+# 5. Generate CycloneDX 1.5 JSON SBOM
+./distro/tools/os1.sh sbom
+
+# 6. Run automated verification suites in QEMU / OVMF
+./distro/tools/os1.sh wayland-test
+./distro/tools/os1.sh iso-test
+OS1_INSTALL_DISK_GB=10 OS1_INSTALL_RAM=2048M ./distro/tools/os1.sh install-test
+```
+
+## Merged Pull Requests & Verified CI Runs
+
+- **PR #1 (Phases 0–1):** Kernel `7.4.0-rc3-os1` + QEMU serial boot — CI `44461985823` (PASS)
+- **PR #2 (Phase 2):** Debian 12 userspace + persistence — CI `44466206157` (PASS)
+- **PR #3 (Phase 3):** UEFI Live ISO + Recovery Mode — CI `44468834858` (PASS)
+- **PR #4 (Phase 4):** Clean-disk UEFI installation + 2 reboots — CI `44471364131` (PASS)
+- **PR #5 (Phase 5):** KDE Plasma/KWin Wayland desktop — CI `44482048774` (PASS)
+- **PR #6 (Phases 6–7):** OS-1 identity, Top Menu Bar, Floating Dock — CI `44486494590` (PASS)
+- **PR #7 (Phases 8–12):** Finder-class Files, Spotlight/Overview, 11 Native Apps, A11y, Light/Dark screenshots — CI `44488906713` (PASS)
+- **PR #8 (Phases 13–15):** Native `.deb`s, CycloneDX 1.5 SBOM (1,035 components), UFW firewall, Orca, 843 MiB full Desktop UEFI Live ISO + 10 GiB clean-install qualification — CI `44491035539` (PASS)
+
+## Next Steps for Human Maintainer
+
+1. Optionally test the 843 MiB UEFI Live ISO on physical Intel/AMD x86-64 UEFI hardware (see [`docs/KNOWN_GAPS.md`](KNOWN_GAPS.md)).
+2. Sign `distro/out/apt-repo/Release` with a release GPG key and publish a GitHub Release with `os1-live-x86_64.iso`, `os1-sbom.cdx.json`, and `SHA256SUMS`.
+3. Perform final legal/trade-dress review prior to public distribution.
