@@ -1,0 +1,17 @@
+# OS-1 distribution build outputs and ephemeral artifacts
+# Never commit generated ISOs, disk images, kernel object trees, caches, or logs.
+/out/
+/work/
+/cache/
+*.iso
+*.img
+*.qcow2
+*.raw
+*.cpio
+*.cpio.gz
+*.cpio.zst
+*.log
+*.deb
+*.ddeb
+*.changes
+*.buildinfo
