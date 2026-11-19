@@ -91,6 +91,8 @@ DESKTOP_PACKAGES=(
     upower
     konsole
     dolphin
+    kio-extras
+    libnotify-bin
     firefox-esr
     kate
     gwenview
@@ -340,11 +342,18 @@ fc-cache -f || true
     mkdir -p "${ROOTFS_DIR}/etc/xdg/autostart" "${ROOTFS_DIR}/usr/share/os1" "${ROOTFS_DIR}/usr/local/bin"
     install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kdeglobals" "${ROOTFS_DIR}/etc/xdg/kdeglobals"
     install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kwinrc" "${ROOTFS_DIR}/etc/xdg/kwinrc"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/kglobalshortcutsrc" "${ROOTFS_DIR}/etc/xdg/kglobalshortcutsrc"
+    install -m 0644 "${REPO_ROOT}/distro/shell/xdg/krunnerrc" "${ROOTFS_DIR}/etc/xdg/krunnerrc"
+    install -m 0644 "${REPO_ROOT}/distro/apps/dolphinrc" "${ROOTFS_DIR}/etc/xdg/dolphinrc"
     install -m 0644 "${REPO_ROOT}/distro/shell/xdg/autostart/os1-shell-firstboot.desktop" \
         "${ROOTFS_DIR}/etc/xdg/autostart/os1-shell-firstboot.desktop"
     install -m 0644 "${REPO_ROOT}/distro/branding/tokens.json" "${ROOTFS_DIR}/usr/share/os1/tokens.json"
+    install -m 0644 "${REPO_ROOT}/distro/apps/manifest.json" "${ROOTFS_DIR}/usr/share/os1/apps-manifest.json"
     install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-appearance" "${ROOTFS_DIR}/usr/local/bin/os1-appearance"
     install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-shell-init" "${ROOTFS_DIR}/usr/local/bin/os1-shell-init"
+    install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-accessibility" "${ROOTFS_DIR}/usr/local/bin/os1-accessibility"
+    install -m 0755 "${REPO_ROOT}/distro/installer/os1-firstboot" "${ROOTFS_DIR}/usr/local/bin/os1-firstboot"
+    install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${ROOTFS_DIR}/usr/local/bin/os1-fs-test"
 fi
 
 # Install OS-1 UEFI system installer into rootfs

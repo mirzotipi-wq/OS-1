@@ -53,16 +53,12 @@ dock.hiding = "none";
 
 var tasks = dock.addWidget("org.kde.plasma.icontasks");
 tasks.currentConfigGroup = ["General"];
-tasks.writeConfig("launchers", [
-    "applications:org.kde.dolphin.desktop",
-    "applications:firefox-esr.desktop",
-    "applications:org.kde.konsole.desktop",
-    "applications:org.kde.kate.desktop",
-    "applications:org.kde.gwenview.desktop",
-    "applications:org.kde.kcalc.desktop",
-    "applications:systemsettings.desktop"
-]);
+tasks.writeConfig(
+    "launchers",
+    "applications:org.kde.dolphin.desktop,applications:firefox-esr.desktop,applications:org.kde.konsole.desktop,applications:org.kde.kate.desktop,applications:org.kde.gwenview.desktop,applications:org.kde.kcalc.desktop,applications:systemsettings.desktop"
+);
 tasks.writeConfig("groupingStrategy", 1);
 tasks.writeConfig("indicateAudioStreams", true);
+tasks.reloadConfig();
 
 dock.addWidget("org.kde.plasma.trash");

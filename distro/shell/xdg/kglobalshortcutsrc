@@ -1,0 +1,15 @@
+[kwin]
+Overview=Meta+Up,Meta+W,Toggle Overview
+Switch One Desktop to the Left=Meta+Left,Ctrl+Alt+Left,Switch One Desktop to the Left
+Switch One Desktop to the Right=Meta+Right,Ctrl+Alt+Right,Switch One Desktop to the Right
+Window Close=Meta+Q\tAlt+F4,Alt+F4,Close Window
+Window Maximize=Meta+Return,Meta+PgUp,Maximize Window
+Window Minimize=Meta+M,Meta+PgDown,Minimize Window
+Show Desktop=Meta+D,Meta+D,Peek at Desktop
+
+[org.kde.krunner.desktop]
+_launch=Meta+Space\tAlt+Space\tAlt+F2,Alt+Space\tAlt+F2\tSearch,KRunner
+
+[org.kde.spectacle.desktop]
+RectangularRegionScreenShot=Meta+Shift+4,Meta+Shift+Print,Capture Rectangular Region
+FullScreenScreenShot=Meta+Shift+3,Shift+Print,Capture Entire Desktop
