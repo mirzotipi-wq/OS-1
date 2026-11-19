@@ -21,7 +21,9 @@ case "${cmd}" in
         for f in \
             "${REPO_ROOT}/distro/kernel/build-kernel.sh" \
             "${REPO_ROOT}/distro/build/build-initramfs.sh" \
+            "${REPO_ROOT}/distro/build/build-live-initramfs.sh" \
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
+            "${REPO_ROOT}/distro/build/build-iso.sh" \
             "${REPO_ROOT}/distro/tests/qemu-serial-boot.sh" \
             "${REPO_ROOT}/distro/tools/os1.sh"; do
             bash -n "${f}"
@@ -30,7 +32,8 @@ case "${cmd}" in
         echo "Python syntax check:"
         for f in \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
-            "${REPO_ROOT}/distro/tests/qemu-userspace-test.py"; do
+            "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py"; do
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
@@ -52,6 +55,12 @@ case "${cmd}" in
     userspace-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" "$@"
         ;;
+    iso)
+        exec "${REPO_ROOT}/distro/build/build-iso.sh" "$@"
+        ;;
+    iso-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" "$@"
+        ;;
     clean)
         echo "[os1] Removing ephemeral build outputs: ${OUT_ROOT}"
         rm -rf "${OUT_ROOT}"
@@ -69,6 +78,8 @@ Commands:
   boot-test       Boot OS-1 kernel + initramfs in QEMU and assert serial proof (Phase 1)
   rootfs          Build pinned Debian stable rootfs + persistent ext4 disk image (Phase 2, root)
   userspace-test  Boot OS-1 kernel on persistent disk, login, network, APT, reboot test (Phase 2)
+  iso             Build x86-64 UEFI bootable Live ISO with Recovery Mode (Phase 3, root)
+  iso-test        Boot fresh UEFI Live ISO + Recovery Mode in QEMU/OVMF (Phase 3)
   clean           Remove generated build outputs in distro/out/
 EOF
         ;;
