@@ -321,7 +321,24 @@ def main() -> int:
             )
             print("[PASS] Core apps (konsole, dolphin, firefox-esr) verified & konsole launched on Wayland", flush=True)
 
-            # Capture real QEMU framebuffer screenshot via monitor screendump (retry while TCG finishes first frame)
+            # Verify Phase 6 branding assets & Phase 7 Top Menu Bar + Floating Dock shell layout
+            vm.run_cmd(
+                "test -f /usr/share/os1/tokens.json && "
+                "test -f /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png && "
+                "test -f /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080-dark.png && "
+                "test -f /usr/share/color-schemes/OS1Light.colors && "
+                "test -f /usr/share/color-schemes/OS1Dark.colors && "
+                "test -f /usr/share/aurorae/themes/OS1Sequoia/OS1Sequoiarc && "
+                "test -x /usr/local/bin/os1-appearance && "
+                "grep -q 'org.kde.plasma.appmenu' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && "
+                "grep -q 'org.kde.plasma.icontasks' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc && "
+                "grep -q 'org.kde.plasma.trash' /home/os1/.config/plasma-org.kde.plasma.desktop-appletsrc",
+                "SHELL_LAYOUT",
+                timeout=30.0,
+            )
+            print("[PASS] Phase 6 OS-1 branding & Phase 7 Top Menu Bar + Floating Dock layout verified", flush=True)
+
+            # Capture real QEMU framebuffer screenshot in OS-1 Light mode (retry while TCG finishes painting)
             w, h, ratio = 0, 0, 0.0
             for attempt in range(1, 7):
                 vm.monitor_cmd("mouse_move 25 25")
@@ -330,16 +347,33 @@ def main() -> int:
                 if os.path.isfile(ppm_path) and os.path.getsize(ppm_path) >= 1000:
                     w, h, ratio = ppm_to_png_and_check_nonblack(ppm_path, png_path)
                     print(
-                        f"[os1-phase5-test] Screendump attempt {attempt}: {w}x{h}, non-black={ratio:.1%}",
+                        f"[os1-phase5-test] Light screendump attempt {attempt}: {w}x{h}, non-black={ratio:.1%}",
                         flush=True,
                     )
-                    if ratio >= 0.01:
+                    if ratio >= 0.20:
                         break
             if w == 0 or h == 0:
                 raise RuntimeError(f"QEMU screendump failed or empty at {ppm_path}")
-            if ratio < 0.01:
-                raise RuntimeError(f"Screenshot appears completely black after retries (non-black={ratio:.2%})")
-            print(f"[PASS] Captured real Wayland desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
+            if ratio < 0.20:
+                raise RuntimeError(f"Light desktop screenshot under-rendered (non-black={ratio:.2%}, expected >= 20%)")
+            print(f"[PASS] Captured OS-1 Light desktop screenshot: {png_path} ({w}x{h}, non-black={ratio:.1%})", flush=True)
+
+            # Switch live to OS-1 Dark appearance and capture Dark desktop screenshot
+            dark_png_path = os.path.join(shot_dir, "phase6-7-os1-dark-desktop.png")
+            vm.run_cmd(
+                "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
+                "QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 os1-appearance dark",
+                "DARK_MODE",
+                timeout=30.0,
+            )
+            time.sleep(6.0)
+            vm.monitor_cmd("mouse_move 10 10")
+            time.sleep(2.0)
+            vm.monitor_cmd(f"screendump {ppm_path}")
+            dw, dh, dratio = ppm_to_png_and_check_nonblack(ppm_path, dark_png_path)
+            print(f"[PASS] Captured OS-1 Dark desktop screenshot: {dark_png_path} ({dw}x{dh}, non-black={dratio:.1%})", flush=True)
+            if dratio < 0.10:
+                raise RuntimeError(f"Dark desktop screenshot appears blank (non-black={dratio:.2%})")
 
             vm.poweroff_and_wait("os1")
             print("[PASS] Desktop session clean poweroff completed", flush=True)

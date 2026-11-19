@@ -25,6 +25,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
             "${REPO_ROOT}/distro/build/build-iso.sh" \
             "${REPO_ROOT}/distro/installer/os1-install" \
+            "${REPO_ROOT}/distro/shell/bin/os1-appearance" \
             "${REPO_ROOT}/distro/tests/qemu-serial-boot.sh" \
             "${REPO_ROOT}/distro/tools/os1.sh"; do
             bash -n "${f}"
@@ -32,6 +33,7 @@ case "${cmd}" in
         done
         echo "Python syntax check:"
         for f in \
+            "${REPO_ROOT}/distro/branding/generate-assets.py" \
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \

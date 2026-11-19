@@ -1,0 +1,33 @@
+[kdeglobals][KDE]
+widgetStyle=Breeze
+
+[kdeglobals][General]
+ColorScheme=OS1Light
+font=Noto Sans,10,-1,5,50,0,0,0,0,0
+fixed=DejaVu Sans Mono,10,-1,5,50,0,0,0,0,0
+smallestReadableFont=Noto Sans,8,-1,5,50,0,0,0,0,0
+toolBarFont=Noto Sans,9,-1,5,50,0,0,0,0,0
+menuFont=Noto Sans,10,-1,5,50,0,0,0,0,0
+
+[kdeglobals][Icons]
+Theme=breeze
+
+[plasmarc][Theme]
+name=default
+
+[Wallpaper]
+defaultWallpaperTheme=OS1Horizon
+defaultFileSuffix=.png
+defaultWidth=1920
+defaultHeight=1080
+
+[kwinrc][org.kde.kdecoration2]
+library=org.kde.kwin.aurorae
+theme=__aurorae__svg__OS1Sequoia
+ButtonsOnLeft=XIA
+ButtonsOnRight=
+BorderSize=None
+ShowToolTips=false
+
+[kcminputrc][Mouse]
+cursorTheme=breeze_cursors
