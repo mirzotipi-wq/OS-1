@@ -127,7 +127,7 @@ fi
 
 echo "[os1-install] Formatting ${EFI_PART} (FAT32) and ${ROOT_PART} (ext4)..."
 mkfs.fat -F 32 -n OS1_EFI "${EFI_PART}" >/dev/null
-mkfs.ext4 -F -L OS1_ROOT "${ROOT_PART}" >/dev/null
+mkfs.ext4 -F -O ^orphan_file,^metadata_csum_seed -L OS1_ROOT "${ROOT_PART}" >/dev/null
 
 EFI_UUID="$(blkid -s UUID -o value "${EFI_PART}")"
 ROOT_UUID="$(blkid -s UUID -o value "${ROOT_PART}")"
@@ -142,8 +142,10 @@ mount "${EFI_PART}" "${TARGET}/boot/efi"
 echo "[os1-install] Copying clean OS-1 rootfs from /run/live/ro..."
 cp -a /run/live/ro/. "${TARGET}/"
 
-echo "[os1-install] Installing OS-1 kernel to /boot/vmlinuz-os1..."
+echo "[os1-install] Installing OS-1 kernel to /boot/vmlinuz-os1 and ESP..."
+mkdir -p "${TARGET}/boot/efi/EFI/os1"
 cp -f /run/live/medium/boot/vmlinuz "${TARGET}/boot/vmlinuz-os1"
+cp -f /run/live/medium/boot/vmlinuz "${TARGET}/boot/efi/EFI/os1/vmlinuz-os1"
 KERNEL_REL="$(uname -r)"
 
 # Remove live-mode marker
@@ -203,7 +205,10 @@ echo "[os1-install] Installing standalone x86-64 UEFI GRUB bootloader to ESP..."
 mkdir -p "${TARGET}/boot/grub" "${TARGET}/boot/efi/EFI/BOOT" "${TARGET}/boot/efi/EFI/os1"
 
 cat > "${TARGET}/boot/grub/grub.cfg" <<EOF
-search --no-floppy --set=root --fs-uuid ${ROOT_UUID}
+insmod part_gpt
+insmod fat
+insmod ext2
+search --no-floppy --set=root --file /EFI/os1/vmlinuz-os1
 
 serial --unit=0 --speed=115200
 terminal_input console serial
@@ -213,11 +218,11 @@ set default=0
 set timeout=2
 
 menuentry "OS-1 (${KERNEL_REL})" {
-    linux /boot/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+    linux /EFI/os1/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
 }
 
 menuentry "OS-1 Single-User Recovery (${KERNEL_REL})" {
-    linux /boot/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+    linux /EFI/os1/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
 }
 EOF
 
