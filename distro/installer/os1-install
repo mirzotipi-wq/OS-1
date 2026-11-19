@@ -563,28 +563,55 @@ def main(argv: list[str]) -> int:
         print("[os1-install] Installing standalone x86-64 UEFI GRUB bootloader to ESP...", flush=True)
         (target / "boot" / "grub").mkdir(parents=True, exist_ok=True)
         (target / "boot" / "efi" / "EFI" / "BOOT").mkdir(parents=True, exist_ok=True)
+        (target / "etc" / "os1").mkdir(parents=True, exist_ok=True)
+        (target / "etc" / "os1" / "root-partuuid").write_text(f"{root_partuuid}\n", encoding="utf-8")
 
-        grub_cfg = f"""insmod part_gpt
+        # Remove any legacy unversioned /boot/vmlinuz-os1 so os1-update-boot only tracks versioned kernels
+        legacy_vmlinuz = target / "boot" / "vmlinuz-os1"
+        if legacy_vmlinuz.exists():
+            legacy_vmlinuz.unlink()
+
+        if (target / "usr" / "sbin" / "os1-update-boot").is_file():
+            run_checked(["chroot", str(target), "/usr/sbin/os1-update-boot"], env=chroot_env)
+        else:
+            grub_cfg = f"""insmod part_gpt
 insmod fat
 insmod ext2
-search --no-floppy --set=root --file /EFI/os1/{vmlinuz_versioned}
+search --no-floppy --set=root --label OS1_ROOT
 
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
 
 set default=0
-set timeout=2
+set timeout=3
 
 menuentry "OS-1 ({kernel_rel})" {{
-    linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+    linux /boot/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
 }}
 
-menuentry "OS-1 Single-User Recovery ({kernel_rel})" {{
-    linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+menuentry "OS-1 Recovery ({kernel_rel})" {{
+    linux /boot/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 systemd.unit=rescue.target panic=-1
 }}
 """
-        (target / "boot" / "grub" / "grub.cfg").write_text(grub_cfg, encoding="utf-8")
+            (target / "boot" / "grub" / "grub.cfg").write_text(grub_cfg, encoding="utf-8")
+
+        # Embed a minimal bootstrap stub in BOOTX64.EFI that dynamically loads /boot/grub/grub.cfg
+        # from OS1_ROOT so kernel package upgrades & rollbacks take effect atomically without touching ESP.
+        stub_cfg = target / "boot" / "grub" / "efi-bootstrap.cfg"
+        stub_cfg.write_text(
+            "insmod part_gpt\n"
+            "insmod fat\n"
+            "insmod ext2\n"
+            "search --no-floppy --set=root --label OS1_ROOT\n"
+            "if [ -f /boot/grub/grub.cfg ]; then\n"
+            "    configfile /boot/grub/grub.cfg\n"
+            "fi\n"
+            f"search --no-floppy --set=root --file /EFI/os1/{vmlinuz_versioned}\n"
+            f"linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1\n"
+            "boot\n",
+            encoding="utf-8",
+        )
 
         run_checked(
             [
@@ -595,7 +622,7 @@ menuentry "OS-1 Single-User Recovery ({kernel_rel})" {{
                 "--output=/boot/efi/EFI/BOOT/BOOTX64.EFI",
                 "--locales=",
                 "--fonts=",
-                "boot/grub/grub.cfg=/boot/grub/grub.cfg",
+                "boot/grub/grub.cfg=/boot/grub/efi-bootstrap.cfg",
             ],
             env=chroot_env,
         )

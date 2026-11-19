@@ -58,6 +58,7 @@ jobs:
             qemu-system-x86 \
             dpkg-dev \
             lintian \
+            gnupg \
             file
 
       - name: Run OS-1 repository audit (T0-AUDIT)
@@ -74,8 +75,8 @@ jobs:
         if: steps.kernel-cache.outputs.cache-hit != 'true'
         run: ./distro/tools/os1.sh kernel --with-modules
 
-      - name: Build native OS-1 .deb packages & local APT repository (T14-DEBS)
-        run: ./distro/tools/os1.sh debs
+      - name: Build signed native OS-1 .deb packages, versioned kernel .deb & APT repository (T14-DEBS / T20-SIGN)
+        run: OS1_EPHEMERAL_GPG=1 ./distro/tools/os1.sh debs
 
       - name: Build full OS-1 Wayland Desktop rootfs & verify package lifecycle (T15-DESKTOP-ISO / T19-PKG)
         run: |
@@ -96,6 +97,9 @@ jobs:
             images/rootfs-provenance.json \
             apt-repo/*.deb \
             apt-repo/Release \
+            apt-repo/InRelease \
+            apt-repo/Release.gpg \
+            apt-repo/os1-archive-keyring.gpg \
             release/os1-sbom.cdx.json \
             > release/SHA256SUMS)
           cat distro/out/release/SHA256SUMS
@@ -116,6 +120,9 @@ jobs:
             distro/out/release/os1-sbom.cdx.json
             distro/out/release/SHA256SUMS
             distro/out/apt-repo/Release
+            distro/out/apt-repo/InRelease
+            distro/out/apt-repo/Release.gpg
+            distro/out/apt-repo/os1-archive-keyring.gpg
             distro/out/apt-repo/Packages
             distro/out/apt-repo/SHA256SUMS
             distro/out/iso/iso-provenance.json

@@ -57,6 +57,7 @@ jobs:
             grub-common \
             qemu-system-x86 \
             ovmf \
+            gnupg \
             file
 
       - name: Run OS-1 repository audit (T0-AUDIT)
@@ -79,7 +80,10 @@ jobs:
       - name: Run automated clean-disk install, ISO detach & 2-reboot test (T4-INSTALL)
         run: ./distro/tools/os1.sh install-test
 
-      - name: Upload Phase 4 verification artifacts (bounded 7-day retention)
+      - name: Run automated signed update, versioned kernel upgrade & GRUB rollback test (T20-UPDATE-ROLLBACK)
+        run: OS1_UPDATE_DISK_GB=6 ./distro/tools/os1.sh update-rollback-test
+
+      - name: Upload Phase 4 & 20 verification artifacts (bounded 7-day retention)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -87,6 +91,4 @@ jobs:
           retention-days: 7
           path: |
             distro/out/iso/iso-provenance.json
-            distro/out/logs/qemu-phase4-install.log
-            distro/out/logs/qemu-phase4-installed-boot1.log
-            distro/out/logs/qemu-phase4-installed-boot2.log
+            distro/out/logs/*.log

@@ -25,6 +25,49 @@ done
 rm -rf "${PKG_WORK}" "${REPO_DIR}"
 mkdir -p "${PKG_WORK}" "${REPO_DIR}"
 
+EPHEMERAL_GNUPG=""
+cleanup_gpg() {
+    if [[ -n "${EPHEMERAL_GNUPG}" && -d "${EPHEMERAL_GNUPG}" ]]; then
+        rm -rf "${EPHEMERAL_GNUPG}"
+    fi
+}
+trap cleanup_gpg EXIT
+
+GPG_SIGN_KEY="${OS1_GPG_SIGN_KEY:-}"
+GPG_HOMEDIR="${OS1_GPG_HOMEDIR:-}"
+GPG_PUBKEY="${OS1_GPG_PUBKEY:-}"
+
+if [[ "${OS1_EPHEMERAL_GPG:-0}" == "1" && -z "${GPG_SIGN_KEY}" ]]; then
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo "ERROR: OS1_EPHEMERAL_GPG=1 requires gpg in PATH" >&2
+        exit 1
+    fi
+    EPHEMERAL_GNUPG="$(mktemp -d "${TMPDIR:-/tmp}/os1-ephemeral-gpg.XXXXXX")"
+    chmod 0700 "${EPHEMERAL_GNUPG}"
+    GPG_HOMEDIR="${EPHEMERAL_GNUPG}"
+    cat > "${EPHEMERAL_GNUPG}/key-spec" <<'EOF'
+%echo Generating ephemeral OS-1 CI/test archive signing key
+Key-Type: RSA
+Key-Length: 3072
+Name-Real: OS-1 Ephemeral CI Archive Key
+Name-Email: os1-ci-ephemeral@invalid.local
+Expire-Date: 1d
+%no-protection
+%commit
+EOF
+    GNUPGHOME="${GPG_HOMEDIR}" gpg --batch --quiet --generate-key "${EPHEMERAL_GNUPG}/key-spec"
+    GPG_SIGN_KEY="os1-ci-ephemeral@invalid.local"
+    GPG_PUBKEY="${REPO_DIR}/os1-archive-keyring.gpg"
+    GNUPGHOME="${GPG_HOMEDIR}" gpg --batch --yes --export "${GPG_SIGN_KEY}" > "${GPG_PUBKEY}"
+    chmod 0644 "${GPG_PUBKEY}"
+    echo "[os1-debs] Generated ephemeral GPG signing key (public keyring: ${GPG_PUBKEY})"
+elif [[ -n "${GPG_SIGN_KEY}" && -z "${GPG_PUBKEY}" ]]; then
+    GPG_PUBKEY="${REPO_DIR}/os1-archive-keyring.gpg"
+    GNUPGHOME="${GPG_HOMEDIR:-${HOME}/.gnupg}" gpg --batch --yes --export "${GPG_SIGN_KEY}" > "${GPG_PUBKEY}"
+    chmod 0644 "${GPG_PUBKEY}"
+fi
+OS1_GPG_PUBKEY="${GPG_PUBKEY}"
+
 write_copyright() {
     local pkg_root="$1"
     local pkg_name="$2"
@@ -164,6 +207,13 @@ EOF
 fi
 chmod 0644 "${KEY_ROOT}/etc/apt/sources.list.d/os1.list"
 
+mkdir -p "${KEY_ROOT}/usr/share/lintian/overrides"
+cat > "${KEY_ROOT}/usr/share/lintian/overrides/os1-keyring" <<'EOF'
+# os1-keyring intentionally configures the signed OS-1 APT repository source.
+os1-keyring: package-installs-apt-sources [etc/apt/sources.list.d/os1.list]
+EOF
+chmod 0644 "${KEY_ROOT}/usr/share/lintian/overrides/os1-keyring"
+
 cat > "${KEY_ROOT}/DEBIAN/control" <<EOF
 Package: os1-keyring
 Version: ${VERSION}
@@ -294,7 +344,7 @@ Version: ${VERSION}
 Section: misc
 Priority: optional
 Architecture: all
-Depends: os1-shell (>= ${VERSION}), bash
+Depends: os1-shell (>= ${VERSION})
 Maintainer: ${MAINTAINER}
 Description: OS-1 first-run onboarding and user preference helper
  Manages idempotent first-run user appearance and accessibility preferences
@@ -319,7 +369,7 @@ Version: ${VERSION}
 Section: admin
 Priority: optional
 Architecture: all
-Depends: python3, parted, e2fsprogs, dosfstools, grub-efi-amd64-bin, grub-common, util-linux
+Depends: python3, parted, e2fsprogs, dosfstools, grub-efi-amd64-bin, grub-common
 Maintainer: ${MAINTAINER}
 Description: OS-1 preflight-complete, credential-safe UEFI GPT installer
  Installs OS-1 from the UEFI live environment onto a target GPT disk with
@@ -334,8 +384,9 @@ finalize_deb "${INST_ROOT}" "${REPO_DIR}/os1-installer_${VERSION}_all.deb"
 # ---------------------------------------------------------------------------
 echo "[os1-debs] Building os1-tools_${VERSION}_all.deb..."
 TOOLS_ROOT="${PKG_WORK}/os1-tools"
-mkdir -p "${TOOLS_ROOT}/DEBIAN" "${TOOLS_ROOT}/usr/bin"
+mkdir -p "${TOOLS_ROOT}/DEBIAN" "${TOOLS_ROOT}/usr/bin" "${TOOLS_ROOT}/usr/sbin"
 install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${TOOLS_ROOT}/usr/bin/os1-fs-test"
+install -m 0755 "${REPO_ROOT}/distro/tools/os1-update-boot" "${TOOLS_ROOT}/usr/sbin/os1-update-boot"
 
 cat > "${TOOLS_ROOT}/DEBIAN/control" <<EOF
 Package: os1-tools
@@ -345,9 +396,9 @@ Priority: optional
 Architecture: all
 Depends: python3
 Maintainer: ${MAINTAINER}
-Description: OS-1 system verification and diagnostic utilities
- Provides native OS-1 diagnostic and verification utilities including
- os1-fs-test.
+Description: OS-1 system verification, boot management, and diagnostic utilities
+ Provides native OS-1 utilities including os1-fs-test and the atomic GRUB
+ boot menu manager os1-update-boot.
 EOF
 write_copyright "${TOOLS_ROOT}" "os1-tools"
 finalize_deb "${TOOLS_ROOT}" "${REPO_DIR}/os1-tools_${VERSION}_all.deb"
@@ -374,6 +425,15 @@ Description: OS-1 complete Wayland desktop environment metapackage
 EOF
 write_copyright "${META_ROOT}" "os1-desktop-meta"
 finalize_deb "${META_ROOT}" "${REPO_DIR}/os1-desktop-meta_${VERSION}_amd64.deb"
+
+# ---------------------------------------------------------------------------
+# 9. Optional versioned OS-1 kernel package (when bzImage is built)
+# ---------------------------------------------------------------------------
+if [[ "${OS1_INCLUDE_KERNEL_DEB:-1}" == "1" && -f "${OUT_ROOT}/kernel/bzImage" ]]; then
+    echo "[os1-debs] Packaging versioned OS-1 kernel .deb..."
+    OS1_OUT_DIR="${OUT_ROOT}" OS1_APT_REPO_DIR="${REPO_DIR}" OS1_PKG_VERSION="${VERSION}" \
+        "${SCRIPT_DIR}/build-kernel-deb.sh"
+fi
 
 echo "[os1-debs] Validating generated .deb packages..."
 for deb in "${REPO_DIR}"/*.deb; do
@@ -437,7 +497,19 @@ with open(os.path.join(repo_dir, "Release"), "w", encoding="utf-8") as f:
     f.write("\n".join(release_lines) + "\n")
 PYEOF
 
-(cd "${REPO_DIR}" && sha256sum *.deb Packages Packages.gz Release > SHA256SUMS)
+if [[ -n "${GPG_SIGN_KEY}" ]]; then
+    echo "[os1-debs] Signing APT Release metadata (InRelease & Release.gpg)..."
+    GPG_ENV_DIR="${GPG_HOMEDIR:-${HOME}/.gnupg}"
+    GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
+        --local-user "${GPG_SIGN_KEY}" \
+        --clearsign -o "${REPO_DIR}/InRelease" "${REPO_DIR}/Release"
+    GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
+        --local-user "${GPG_SIGN_KEY}" \
+        --armor --detach-sign -o "${REPO_DIR}/Release.gpg" "${REPO_DIR}/Release"
+    (cd "${REPO_DIR}" && sha256sum *.deb Packages Packages.gz Release InRelease Release.gpg os1-archive-keyring.gpg > SHA256SUMS)
+else
+    (cd "${REPO_DIR}" && sha256sum *.deb Packages Packages.gz Release > SHA256SUMS)
+fi
 rm -rf "${PKG_WORK}"
 
 echo "[os1-debs] SUCCESS: APT repository ready at ${REPO_DIR}"

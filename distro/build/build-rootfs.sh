@@ -351,6 +351,15 @@ for pkg in "${OS1_PKGS[@]}"; do
     done
 done
 
+# Install versioned OS-1 kernel package if built in apt-repo (Phase 20)
+for kdeb in "${ROOTFS_DIR}/tmp/os1-debs/linux-image-os1-"*.deb; do
+    if [[ -f "${kdeb}" ]]; then
+        kpkg_name="$(dpkg-deb --field "${kdeb}" Package)"
+        OS1_PKGS+=("${kpkg_name}")
+        OS1_DEB_ARGS+=("/tmp/os1-debs/$(basename "${kdeb}")")
+    fi
+done
+
 chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
     dpkg -i "${OS1_DEB_ARGS[@]}"
 
