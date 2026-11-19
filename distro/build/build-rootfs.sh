@@ -65,7 +65,7 @@ DESKTOP_PACKAGES=(
     sddm
     breeze
     breeze-icon-theme
-    qqc2-desktop-style
+    qml-module-org-kde-qqc2desktopstyle
     qtwayland5
     xkb-data
     xwayland
