@@ -344,7 +344,7 @@ Version: ${VERSION}
 Section: misc
 Priority: optional
 Architecture: all
-Depends: os1-shell (>= ${VERSION})
+Depends: os1-shell (>= ${VERSION}), python3
 Maintainer: ${MAINTAINER}
 Description: OS-1 first-run onboarding and user preference helper
  Manages idempotent first-run user appearance and accessibility preferences

@@ -166,10 +166,12 @@ class QemuVM:
 
 
 def uefi_cmd(ovmf_code: str, ovmf_vars: str, disk_path: str, iso_path: str | None = None, ram: str = "1536M") -> list[str]:
+    accel_args = ["-accel", "tcg", "-cpu", "Haswell"]
+    if os.access("/dev/kvm", os.R_OK | os.W_OK):
+        accel_args = ["-enable-kvm", "-cpu", "host"]
     cmd = [
         "qemu-system-x86_64",
-        "-accel", "tcg",
-        "-cpu", "qemu64",
+        *accel_args,
         "-machine", "q35",
         "-m", ram,
         "-smp", "2",

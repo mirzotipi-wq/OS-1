@@ -243,8 +243,16 @@ def run_lifecycle_checks(rootfs_dir: str, repo_dir: str, base_version: str) -> N
 
     for fpath, owner in expected_owners.items():
         out = chroot_run(["dpkg", "-S", fpath])
-        if not out.startswith(f"{owner}:"):
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        if not lines:
+            raise RuntimeError(f"Expected {fpath} to be owned by {owner}, got empty output")
+        owner_line = lines[-1]
+        pkg_part = owner_line.split(":", 1)[0] if ":" in owner_line else ""
+        owners = [p.strip() for p in pkg_part.split(",") if p.strip()]
+        if owner not in owners:
             raise RuntimeError(f"Expected {fpath} to be owned by {owner}, got: {out.strip()}")
+        if fpath == "/etc/os-release" and not any(ln.startswith("diversion by os1-release ") for ln in lines):
+            raise RuntimeError(f"Expected dpkg-divert by os1-release for /etc/os-release, got: {out.strip()}")
     print(f"[PASS] dpkg -S ownership verified for {len(expected_owners)} OS-1 files", flush=True)
 
     # 2. Build synthetic upgrade version (base_version + '.1') and test upgrade, conffile preservation, remove, purge, reinstall

@@ -1,78 +1,141 @@
-#!/usr/bin/env bash
+#!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-# Phase 10: OS-1 First-Run Onboarding & System Preferences Helper.
-set -euo pipefail
+"""Phase 21: OS-1 First-Run Onboarding & User Preferences Helper.
 
-STATE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/os1-onboarding.conf"
-APPEARANCE=""
-REDUCED_MOTION=""
-REDUCED_TRANSPARENCY=""
-MODE="status"
+Safely parses existing preference state, preserves unspecified preferences across
+partial updates, recovers cleanly from missing or corrupt state files, and writes
+state atomically via temp file + fsync + os.replace.
+"""
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --status)
-            MODE="status"
-            shift
-            ;;
-        --apply)
-            MODE="apply"
-            shift
-            ;;
-        --appearance)
-            APPEARANCE="$2"
-            shift 2
-            ;;
-        --reduced-motion)
-            REDUCED_MOTION="$2"
-            shift 2
-            ;;
-        --reduced-transparency)
-            REDUCED_TRANSPARENCY="$2"
-            shift 2
-            ;;
-        -h|--help)
-            cat <<EOF
-OS-1 First-Run Onboarding Helper
+import argparse
+import os
+import subprocess
+import sys
 
-Usage:
-  os1-firstboot --status
-  os1-firstboot --apply [--appearance light|dark] [--reduced-motion on|off] [--reduced-transparency on|off]
-EOF
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1" >&2
-            exit 2
-            ;;
-    esac
-done
 
-if [[ "${MODE}" == "status" ]]; then
-    echo "=== OS-1 Onboarding Status ==="
-    if [[ -f "${STATE_FILE}" ]]; then
-        cat "${STATE_FILE}"
-    else
-        echo "completed=false"
-    fi
-    exit 0
-fi
+DEFAULTS = {
+    "completed": "false",
+    "appearance": "light",
+    "reduced_motion": "off",
+    "reduced_transparency": "off",
+    "high_contrast": "off",
+    "screen_reader": "off",
+}
 
-mkdir -p "$(dirname "${STATE_FILE}")"
-if [[ -n "${APPEARANCE}" ]]; then
-    os1-appearance "${APPEARANCE}"
-fi
-if [[ -n "${REDUCED_MOTION}" ]]; then
-    os1-accessibility reduced-motion "${REDUCED_MOTION}"
-fi
-if [[ -n "${REDUCED_TRANSPARENCY}" ]]; then
-    os1-accessibility reduced-transparency "${REDUCED_TRANSPARENCY}"
-fi
+VALID_VALUES = {
+    "completed": {"true", "false"},
+    "appearance": {"light", "dark"},
+    "reduced_motion": {"on", "off"},
+    "reduced_transparency": {"on", "off"},
+    "high_contrast": {"on", "off"},
+    "screen_reader": {"on", "off"},
+}
 
-cat > "${STATE_FILE}" <<EOF
-completed=true
-appearance=${APPEARANCE:-light}
-reduced_motion=${REDUCED_MOTION:-off}
-reduced_transparency=${REDUCED_TRANSPARENCY:-off}
-EOF
-echo "[os1-firstboot] Onboarding preferences saved to ${STATE_FILE}"
+
+def state_file_path() -> str:
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(xdg, "os1-onboarding.conf")
+
+
+def load_state(path: str) -> dict[str, str]:
+    state = dict(DEFAULTS)
+    if not os.path.isfile(path):
+        return state
+    try:
+        raw = open(path, "rb").read()
+        text = raw.decode("utf-8", errors="replace")
+    except OSError as exc:
+        print(f"[os1-firstboot] WARN: Could not read {path}: {exc}; using defaults", file=sys.stderr)
+        return state
+
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            print(f"[os1-firstboot] WARN: Ignoring malformed line {lineno} in {path}", file=sys.stderr)
+            continue
+        k, v = stripped.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if k in VALID_VALUES and v in VALID_VALUES[k]:
+            state[k] = v
+        else:
+            print(f"[os1-firstboot] WARN: Ignoring invalid entry {k!r}={v!r} in {path}", file=sys.stderr)
+    return state
+
+
+def atomic_write_state(path: str, state: dict[str, str]) -> None:
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    lines = [
+        f"completed={state['completed']}",
+        f"appearance={state['appearance']}",
+        f"reduced_motion={state['reduced_motion']}",
+        f"reduced_transparency={state['reduced_transparency']}",
+        f"high_contrast={state['high_contrast']}",
+        f"screen_reader={state['screen_reader']}",
+    ]
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, path)
+
+
+def run_helper(cmd: list[str]) -> None:
+    if os.environ.get("OS1_FIRSTBOOT_NO_APPLY") == "1":
+        return
+    subprocess.run(cmd, check=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="OS-1 First-Run Onboarding & Preferences Helper")
+    parser.add_argument("--status", action="store_true", help="Print current onboarding preference state")
+    parser.add_argument("--apply", action="store_true", help="Apply specified preferences and preserve unspecified ones")
+    parser.add_argument("--appearance", choices=("light", "dark"), default=None)
+    parser.add_argument("--reduced-motion", choices=("on", "off"), default=None)
+    parser.add_argument("--reduced-transparency", choices=("on", "off"), default=None)
+    parser.add_argument("--high-contrast", choices=("on", "off"), default=None)
+    parser.add_argument("--screen-reader", choices=("on", "off"), default=None)
+    args = parser.parse_args()
+
+    path = state_file_path()
+    state = load_state(path)
+
+    if not args.apply:
+        print("=== OS-1 Onboarding Status ===")
+        if os.path.isfile(path):
+            for k in ("completed", "appearance", "reduced_motion", "reduced_transparency", "high_contrast", "screen_reader"):
+                print(f"{k}={state[k]}")
+        else:
+            print("completed=false")
+        return 0
+
+    # Apply only explicitly requested settings, preserving all unspecified existing preferences
+    if args.appearance is not None:
+        run_helper(["os1-appearance", args.appearance])
+        state["appearance"] = args.appearance
+    if args.reduced_motion is not None:
+        run_helper(["os1-accessibility", "reduced-motion", args.reduced_motion])
+        state["reduced_motion"] = args.reduced_motion
+    if args.reduced_transparency is not None:
+        run_helper(["os1-accessibility", "reduced-transparency", args.reduced_transparency])
+        state["reduced_transparency"] = args.reduced_transparency
+    if args.high_contrast is not None:
+        run_helper(["os1-accessibility", "high-contrast", args.high_contrast])
+        state["high_contrast"] = args.high_contrast
+    if args.screen_reader is not None:
+        run_helper(["os1-accessibility", "screen-reader", args.screen_reader])
+        state["screen_reader"] = args.screen_reader
+
+    state["completed"] = "true"
+    atomic_write_state(path, state)
+    print(f"[os1-firstboot] Onboarding preferences saved to {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

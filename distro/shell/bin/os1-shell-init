@@ -1,34 +1,102 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
-# First-login initializer for the OS-1 Plasma Wayland desktop shell (Phases 6 & 7).
+# Phase 21: Idempotent, flock-serialized, retryable first-login initializer for the OS-1 Plasma Wayland shell.
 set -euo pipefail
 
-STAMP="${XDG_CONFIG_HOME:-$HOME/.config}/.os1-shell-initialized"
-if [[ -f "${STAMP}" ]]; then
+FORCE=0
+if [[ "${1:-}" == "--force" ]]; then
+    FORCE=1
+fi
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}"
+STAMP="${CONFIG_DIR}/.os1-shell-initialized"
+LOCK_FILE="${XDG_RUNTIME_DIR:-/tmp}/os1-shell-init-$(id -u).lock"
+
+if [[ "${FORCE}" -eq 0 && -f "${STAMP}" ]]; then
     exit 0
 fi
 
-mkdir -p "$(dirname "${STAMP}")" "${HOME}/.local/share"
-LOG="${HOME}/.local/share/os1-shell-init.log"
-exec >"${LOG}" 2>&1
+mkdir -p "${CONFIG_DIR}" "${HOME}/.local/share" "$(dirname "${LOCK_FILE}")"
 
-# Wait for plasmashell DBus service to be ready
-for _ in $(seq 1 30); do
-    if qdbus org.kde.plasmashell /PlasmaShell >/dev/null 2>&1; then
+# Serialize concurrent invocations
+exec 9>"${LOCK_FILE}"
+flock -w 30 9
+
+# Re-check stamp after acquiring lock
+if [[ "${FORCE}" -eq 0 && -f "${STAMP}" ]]; then
+    exit 0
+fi
+
+LOG="${HOME}/.local/share/os1-shell-init.log"
+exec >>"${LOG}" 2>&1
+echo "[os1-shell-init] Starting at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# Wait for plasmashell DBus service to be ready (bounded)
+PLASMA_READY=0
+for _ in $(seq 1 45); do
+    if timeout 5 qdbus org.kde.plasmashell /PlasmaShell >/dev/null 2>&1; then
+        PLASMA_READY=1
         break
     fi
     sleep 1
 done
 
-plasma-apply-lookandfeel -a org.os1.desktop || true
-plasma-apply-colorscheme OS1Light || true
-
-LAYOUT_JS="/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js"
-if [[ -f "${LAYOUT_JS}" ]]; then
-    qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$(cat "${LAYOUT_JS}")" || true
+if [[ "${PLASMA_READY}" -ne 1 ]]; then
+    echo "[os1-shell-init] ERROR: org.kde.plasmashell did not become ready on D-Bus within 45s"
+    exit 1
 fi
 
-plasma-apply-wallpaperimage /usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png || true
-qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+FAILED=0
+run_required() {
+    local desc="$1"
+    shift
+    echo "[os1-shell-init] Running: ${desc}"
+    if ! "$@"; then
+        echo "[os1-shell-init] ERROR: Required step failed: ${desc}"
+        FAILED=1
+    fi
+}
 
-touch "${STAMP}"
+run_required "apply look-and-feel org.os1.desktop" timeout 25 plasma-apply-lookandfeel -a org.os1.desktop
+run_required "apply colorscheme OS1Light" timeout 20 plasma-apply-colorscheme OS1Light
+
+LAYOUT_JS="${OS1_LAYOUT_JS:-/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js}"
+if [[ -f "${LAYOUT_JS}" ]]; then
+    run_required "evaluate OS-1 Plasma layout" \
+        timeout 25 qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$(cat "${LAYOUT_JS}")"
+else
+    echo "[os1-shell-init] ERROR: Layout script not found: ${LAYOUT_JS}"
+    FAILED=1
+fi
+
+WALLPAPER="${OS1_WALLPAPER:-/usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png}"
+if [[ -f "${WALLPAPER}" ]]; then
+    run_required "apply OS1Horizon wallpaper" timeout 20 plasma-apply-wallpaperimage "${WALLPAPER}"
+else
+    echo "[os1-shell-init] ERROR: Wallpaper not found: ${WALLPAPER}"
+    FAILED=1
+fi
+
+# Reconfigure KWin (bounded retry; KWin may briefly reload after look-and-feel)
+KWIN_OK=0
+for _ in 1 2 3; do
+    if timeout 10 qdbus org.kde.KWin /KWin reconfigure >/dev/null 2>&1; then
+        KWIN_OK=1
+        break
+    fi
+    sleep 2
+done
+if [[ "${KWIN_OK}" -ne 1 ]]; then
+    echo "[os1-shell-init] WARN: KWin reconfigure did not reply within retries"
+fi
+
+if [[ "${FAILED}" -ne 0 ]]; then
+    echo "[os1-shell-init] FAILED: Not writing completion stamp so next login will retry."
+    exit 1
+fi
+
+# Atomically write completion stamp ONLY after all required steps succeeded
+TMP_STAMP="$(mktemp "${CONFIG_DIR}/.os1-shell-initialized.XXXXXX")"
+printf 'initialized_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${TMP_STAMP}"
+mv -f "${TMP_STAMP}" "${STAMP}"
+echo "[os1-shell-init] Completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

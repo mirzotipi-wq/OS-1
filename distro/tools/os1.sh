@@ -26,7 +26,6 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-iso.sh" \
             "${REPO_ROOT}/distro/packages/build-debs.sh" \
             "${REPO_ROOT}/distro/packages/build-kernel-deb.sh" \
-            "${REPO_ROOT}/distro/installer/os1-firstboot" \
             "${REPO_ROOT}/distro/shell/bin/os1-appearance" \
             "${REPO_ROOT}/distro/shell/bin/os1-shell-init" \
             "${REPO_ROOT}/distro/shell/bin/os1-accessibility" \
@@ -41,16 +40,19 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/build/generate-sbom.py" \
             "${REPO_ROOT}/distro/installer/os1-install" \
+            "${REPO_ROOT}/distro/installer/os1-firstboot" \
             "${REPO_ROOT}/distro/tools/os1-update-boot" \
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
             "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
             "${REPO_ROOT}/distro/tests/package-verify-test.py" \
+            "${REPO_ROOT}/distro/tests/firstboot-state-test.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-install-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-update-rollback-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-installed-desktop-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-wayland-test.py"; do
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
@@ -61,6 +63,8 @@ case "${cmd}" in
         python3 "${REPO_ROOT}/distro/tests/installer-safety-test.py"
         echo "Native Debian package correctness check:"
         python3 "${REPO_ROOT}/distro/tests/package-verify-test.py"
+        echo "First-boot preference & shell-init unit test:"
+        python3 "${REPO_ROOT}/distro/tests/firstboot-state-test.py"
         echo "Disk space:"
         df -h "${REPO_ROOT}"
         ;;
@@ -93,6 +97,9 @@ case "${cmd}" in
         ;;
     update-rollback-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-update-rollback-test.py" "$@"
+        ;;
+    installed-desktop-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-installed-desktop-test.py" "$@"
         ;;
     wayland-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-wayland-test.py" "$@"

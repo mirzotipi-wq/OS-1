@@ -110,7 +110,10 @@ jobs:
       - name: Clean-install full Desktop ISO to 10 GiB disk, detach ISO & verify 2 reboots + active UFW/nft/Orca/fs (T15-DESKTOP-INSTALL)
         run: OS1_INSTALL_DISK_GB=10 OS1_INSTALL_RAM=2048M ./distro/tools/os1.sh install-test
 
-      - name: Upload Phase 14-15 Release Qualification Evidence Bundle (7-day retention)
+      - name: Verify installed graphical SDDM login as alice, Wayland apps, first-boot state & reboot persistence (T21-INSTALLED-GUI)
+        run: OS1_INSTALL_DISK_GB=10 OS1_DESKTOP_RAM=2560M ./distro/tools/os1.sh installed-desktop-test
+
+      - name: Upload Phase 14-21 Release Qualification Evidence Bundle (7-day retention)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -127,4 +130,5 @@ jobs:
             distro/out/apt-repo/SHA256SUMS
             distro/out/iso/iso-provenance.json
             distro/out/images/rootfs-provenance.json
+            distro/out/screenshots/*.png
             distro/out/logs/*.log
