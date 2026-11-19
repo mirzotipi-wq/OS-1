@@ -87,7 +87,7 @@ DESKTOP_PACKAGES=(
     okular
     kcalc
     ark
-    spectacle
+    kde-spectacle
     plasma-systemmonitor
     fonts-noto-core
     fonts-noto-color-emoji
