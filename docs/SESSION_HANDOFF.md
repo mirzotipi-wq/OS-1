@@ -3,34 +3,22 @@
 ## 1. Current Repository & Branch State
 
 - **Repository:** `https://github.com/mirzotipi-wq/OS-1.git`
-- **Branch:** `os1/phase0-1-foundation-kernel-boot` (branched from `master` at `666539eecdf4db623f5e3c3e55cf9f2dfad24aa4`)
-- **Kernel Source:** Upstream Linux `7.4.0-rc3` (`Makefile`: `VERSION=7`, `PATCHLEVEL=4`, `SUBLEVEL=0`, `EXTRAVERSION=-rc3`), unmodified.
-- **Working Tree:** Ephemeral build artifacts live exclusively in `distro/out/` (ignored by `distro/.gitignore`).
+- **Verified Phase 0–1 PR:** PR #1 (`os1/phase0-1-foundation-kernel-boot`)
+- **Verified Phase 1 CI Run:** `https://github.com/mirzotipi-wq/OS-1/actions/runs/44461985823`
+  - Kernel: `7.4.0-rc3-os1-g9e716dcb5530` (`bzImage` SHA-256 `f844850f3d2185039af202879f906a7a7cd7fce8fda1ff93c66347e54c744244`)
+  - QEMU serial boot proof: PASS (3.18s to clean poweroff, zero panics).
 
-## 2. Environment & Toolchain Notes
-
-- **Local Sandbox VM:** Debian 12 x86-64, 2 vCPU, 7.8 GiB RAM, 18 GiB free in `/home/antigravity`, non-root (`no sudo/apt`). Has `gcc 12.2.0`, `make 4.3`, `flex`, `bison`, `libssl-dev`, `python3`, `dpkg-deb`, `fakeroot`. Missing `bc`, `libelf-dev`, `cpio`, `kmod`, `qemu-system-x86_64`, `/dev/kvm`.
-- **GitHub Actions CI (`ubuntu-latest`):** Enabled on `mirzotipi-wq/OS-1`. Runs full Phase 1 kernel compilation (`bzImage`), BusyBox initramfs build, and QEMU serial boot proof via `.github/workflows/phase1-kernel-boot.yml`.
-
-## 3. Exact Commands to Reproduce / Resume
+## 2. Exact Commands to Reproduce Phase 1
 
 ```bash
-# 1. Inspect repo state & syntax
 ./distro/tools/os1.sh audit
-
-# 2. Validate merged OS-1 x86_64 Kconfig (works even in minimal VMs)
-./distro/tools/os1.sh kernel --config-only
-
-# 3. Full Phase 1 pipeline (requires bc, libelf-dev, libssl-dev, qemu-system-x86, busybox-static)
 ./distro/tools/os1.sh kernel
 ./distro/tools/os1.sh initramfs
 ./distro/tools/os1.sh boot-test
-
-# 4. Clean ephemeral build outputs
-./distro/tools/os1.sh clean
 ```
 
-## 4. Immediate Next Task
+## 3. Active Next Task (Phase 2)
 
-1. Verify GitHub Actions workflow `.github/workflows/phase1-kernel-boot.yml` passes end-to-end (`T1-KBUILD` + `T1-QEMU-BOOT`) and record the verified run URL, `uname -a`, and `bzImage` SHA-256 in `docs/STATUS.md`.
-2. **Phase 2 Unblocker:** Implement `distro/build/build-rootfs.sh` (pinned Debian stable rootfs via `mmdebstrap`/`debootstrap` with `systemd`, `NetworkManager`, `PipeWire`, non-root `os1` user, `sudo`, persistent ext4 disk image) and `distro/tests/qemu-userspace-test.sh` (automated serial login, networking check, APT package install, file creation, reboot, and persistence verification using the OS-1 kernel).
+1. Merge PR #1 into `master` and branch `os1/phase2-debian-userspace`.
+2. Implement `distro/build/build-rootfs.sh` (pinned Debian 12 `bookworm` rootfs via `mmdebstrap`, `systemd`, `NetworkManager`, `PipeWire`, non-root user `os1`, `sudo`, persistent ext4 disk image) and `distro/tests/qemu-userspace-test.py` (boots OS-1 kernel on persistent ext4 disk, logs in as non-root `os1`, checks networking, installs a real APT package, creates a file, reboots, and verifies persistence).
+3. Add kernel build caching in CI keyed on kernel source + Kconfig fragment so Phase 2+ CI runs reuse the exact compiled OS-1 kernel cleanly.
