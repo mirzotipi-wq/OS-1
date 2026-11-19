@@ -278,16 +278,24 @@ def main() -> int:
             )
             print("[PASS] kwin_wayland compositor running & /run/user/1000/wayland-0 active", flush=True)
 
-            # Wait briefly for plasmashell and pipewire
+            # Wait for live (non-zombie) plasmashell and pipewire
             vm.run_cmd(
-                "for i in $(seq 1 45); do pgrep -x plasmashell >/dev/null 2>&1 && break; sleep 2; done; "
-                "pgrep -a plasmashell; "
-                "pgrep -a pipewire || true; "
-                "pgrep -a Xwayland || true",
+                "for i in $(seq 1 45); do "
+                "  pid=$(pgrep -x plasmashell | head -n1); "
+                "  if [ -n \"$pid\" ] && ! ps -o stat= -p \"$pid\" | grep -q Z; then break; fi; "
+                "  sleep 2; "
+                "done; "
+                "ps -eo pid,stat,args | grep -E '[p]lasmashell|[p]ipewire|[X]wayland'; "
+                "pid=$(pgrep -x plasmashell | head -n1); "
+                "if [ -z \"$pid\" ] || ps -o stat= -p \"$pid\" | grep -q Z; then "
+                "  echo '=== PLASMA DIAGNOSTICS ==='; "
+                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus journalctl --user -b -n 50 --no-pager || true; "
+                "  exit 1; "
+                "fi",
                 "PLASMA",
                 timeout=120.0,
             )
-            print("[PASS] plasmashell running in Wayland session", flush=True)
+            print("[PASS] plasmashell running cleanly in Wayland session", flush=True)
 
             # Verify core apps installed & launch Konsole in the Wayland session
             vm.run_cmd(
@@ -300,16 +308,16 @@ def main() -> int:
             vm.run_cmd(
                 "XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus "
                 "systemd-run --user --unit=os1-test-konsole konsole; "
-                "for i in $(seq 1 15); do pgrep -x konsole >/dev/null 2>&1 && break; sleep 1; done; "
+                "for i in $(seq 1 20); do pgrep -x konsole >/dev/null 2>&1 && break; sleep 1; done; "
                 "if ! pgrep -x konsole >/dev/null 2>&1; then "
                 "  echo '=== KONSOLE DIAGNOSTICS ==='; "
-                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show-environment || true; "
+                "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user --no-pager show-environment || true; "
                 "  XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus journalctl --user -u os1-test-konsole -n 40 --no-pager || true; "
                 "  exit 1; "
                 "fi; "
-                "sleep 5; pgrep -a konsole",
+                "sleep 6; pgrep -a konsole",
                 "KONSOLE",
-                timeout=45.0,
+                timeout=60.0,
             )
             print("[PASS] Core apps (konsole, dolphin, firefox-esr) verified & konsole launched on Wayland", flush=True)
 

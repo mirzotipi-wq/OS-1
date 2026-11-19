@@ -63,10 +63,18 @@ DESKTOP_PACKAGES=(
     plasma-workspace-wayland
     kwin-wayland
     sddm
+    breeze
+    breeze-icon-theme
+    qqc2-desktop-style
+    qtwayland5
+    xkb-data
     xwayland
     xserver-xorg-core
     xserver-xorg-input-libinput
     xserver-xorg-video-fbdev
+    libgl1
+    libegl1
+    libgles2
     libgl1-mesa-dri
     mesa-vulkan-drivers
     libegl-mesa0
@@ -284,8 +292,26 @@ EOF
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
 export MOZ_ENABLE_WAYLAND=1
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
+if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+    export LIBGL_ALWAYS_SOFTWARE=1
+    export GALLIUM_DRIVER=llvmpipe
+fi
 EOF
     chmod 0644 "${ROOTFS_DIR}/etc/profile.d/10-os1-graphics.sh"
+
+    mkdir -p "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators"
+    cat > "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env" <<'EOF'
+#!/bin/sh
+# OS-1 GPU environment generator: enable Mesa llvmpipe fallback only when no 3D render node exists.
+echo "XDG_SESSION_TYPE=wayland"
+echo "MOZ_ENABLE_WAYLAND=1"
+echo "QT_AUTO_SCREEN_SCALE_FACTOR=1"
+if ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+    echo "LIBGL_ALWAYS_SOFTWARE=1"
+    echo "GALLIUM_DRIVER=llvmpipe"
+fi
+EOF
+    chmod 0755 "${ROOTFS_DIR}/usr/lib/systemd/user-environment-generators/10-os1-gpu-env"
 
     chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
 systemctl enable sddm.service
