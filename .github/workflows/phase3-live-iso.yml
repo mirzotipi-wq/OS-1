@@ -1,0 +1,94 @@
+name: Phase 3 - OS-1 Bootable UEFI Live ISO & Recovery
+
+on:
+  push:
+    branches:
+      - master
+      - 'os1/**'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: phase3-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phase3-uefi-live-iso:
+    name: Build x86_64 UEFI Live ISO & Verify Live + Recovery Boot in QEMU/OVMF
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space on runner
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
+
+      - name: Install kernel, rootfs, ISO, and QEMU/OVMF dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libelf-dev \
+            libssl-dev \
+            cpio \
+            kmod \
+            xz-utils \
+            busybox-static \
+            mmdebstrap \
+            debian-archive-keyring \
+            e2fsprogs \
+            dosfstools \
+            mtools \
+            squashfs-tools \
+            xorriso \
+            grub-efi-amd64-bin \
+            grub-common \
+            qemu-system-x86 \
+            ovmf \
+            file
+
+      - name: Run OS-1 repository audit (T0-AUDIT)
+        run: ./distro/tools/os1.sh audit
+
+      - name: Restore cached OS-1 x86_64 kernel
+        id: kernel-cache
+        uses: actions/cache@v4
+        with:
+          path: distro/out/kernel
+          key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
+
+      - name: Build OS-1 x86_64 kernel if cache miss (T1-KBUILD)
+        if: steps.kernel-cache.outputs.cache-hit != 'true'
+        run: ./distro/tools/os1.sh kernel
+
+      - name: Build OS-1 x86_64 UEFI Live ISO (T3-ISO-BUILD)
+        run: sudo ./distro/tools/os1.sh iso
+
+      - name: Verify fresh UEFI Live ISO & Recovery Mode in QEMU/OVMF (T3-ISO-UEFI)
+        run: ./distro/tools/os1.sh iso-test
+
+      - name: Print ISO provenance manifest
+        run: cat distro/out/iso/iso-provenance.json
+
+      - name: Upload Phase 3 verification artifacts (bounded 7-day retention)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-uefi-iso-evidence
+          retention-days: 7
+          path: |
+            distro/out/iso/iso-provenance.json
+            distro/out/logs/qemu-phase3-uefi-live.log
+            distro/out/logs/qemu-phase3-uefi-recovery.log
