@@ -39,6 +39,8 @@ PACKAGES=(
     e2fsprogs
     dosfstools
     parted
+    grub-efi-amd64-bin
+    grub-common
     nano
     less
     bash-completion
@@ -186,6 +188,12 @@ cat > "${ROOTFS_DIR}/etc/sudoers.d/10-os1-sudo" <<'EOF'
 %sudo ALL=(ALL:ALL) ALL
 EOF
 chmod 0440 "${ROOTFS_DIR}/etc/sudoers.d/10-os1-sudo"
+
+# Install OS-1 UEFI system installer into rootfs
+if [[ -f "${REPO_ROOT}/distro/installer/os1-install" ]]; then
+    mkdir -p "${ROOTFS_DIR}/usr/local/sbin"
+    install -m 0755 "${REPO_ROOT}/distro/installer/os1-install" "${ROOTFS_DIR}/usr/local/sbin/os1-install"
+fi
 
 # Clean apt caches to keep disk image compact
 rm -rf "${ROOTFS_DIR}/var/lib/apt/lists/"* "${ROOTFS_DIR}/var/cache/apt/archives/"*.deb

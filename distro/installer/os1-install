@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# OS-1 Phase 4 UEFI System Installer (nondestructive by default).
+set -euo pipefail
+
+DISK=""
+USERNAME=""
+PASSWORD=""
+HOSTNAME_VAL="os1"
+TIMEZONE="UTC"
+LOCALE="en_US.UTF-8"
+CONFIRM_ERASE=0
+
+usage() {
+    cat <<EOF
+OS-1 System Installer (UEFI / GPT)
+
+Usage: os1-install --disk <device> --user <name> --password <pass> [options]
+
+Required:
+  --disk <dev>            Target block device (e.g. /dev/vda, /dev/sda, /dev/nvme0n1)
+  --user <name>           First non-root administrator username
+  --password <pass>       Password for the first user
+
+Optional:
+  --hostname <name>       System hostname (default: os1)
+  --timezone <tz>         IANA timezone (default: UTC)
+  --locale <locale>       System locale (default: en_US.UTF-8)
+  --confirm-erase-disk    REQUIRED explicit confirmation to erase and repartition --disk
+  -h, --help              Show this help message
+
+SAFETY: Without --confirm-erase-disk, os1-install runs in NONDESTRUCTIVE dry-run
+mode and will NOT modify any partition table or filesystem.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --disk) DISK="$2"; shift 2 ;;
+        --user) USERNAME="$2"; shift 2 ;;
+        --password) PASSWORD="$2"; shift 2 ;;
+        --hostname) HOSTNAME_VAL="$2"; shift 2 ;;
+        --timezone) TIMEZONE="$2"; shift 2 ;;
+        --locale) LOCALE="$2"; shift 2 ;;
+        --confirm-erase-disk) CONFIRM_ERASE=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+if [[ "$(id -u)" -ne 0 ]]; then
+    echo "ERROR: os1-install must run as root." >&2
+    exit 1
+fi
+
+if [[ -z "${DISK}" || -z "${USERNAME}" || -z "${PASSWORD}" ]]; then
+    echo "ERROR: --disk, --user, and --password are required." >&2
+    usage
+    exit 2
+fi
+
+if [[ ! -b "${DISK}" ]]; then
+    echo "ERROR: Target disk is not a block device: ${DISK}" >&2
+    exit 1
+fi
+
+if [[ ! "${USERNAME}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+    echo "ERROR: Invalid Linux username: ${USERNAME}" >&2
+    exit 2
+fi
+
+if [[ ! -d /run/live/ro || ! -f /run/live/medium/boot/vmlinuz ]]; then
+    echo "ERROR: Live media not detected at /run/live/ro and /run/live/medium/boot/vmlinuz." >&2
+    exit 1
+fi
+
+echo "================================================================"
+echo " OS-1 UEFI Installation Plan"
+echo "================================================================"
+echo "  Target Disk:  ${DISK} (ALL EXISTING DATA WILL BE ERASED)"
+echo "  Layout:       GPT -> p1: 256 MiB FAT32 ESP + p2: ext4 root"
+echo "  Hostname:     ${HOSTNAME_VAL}"
+echo "  Admin User:   ${USERNAME} (sudo)"
+echo "  Timezone:     ${TIMEZONE}"
+echo "  Locale:       ${LOCALE}"
+echo "================================================================"
+
+if (( CONFIRM_ERASE == 0 )); then
+    echo "WARNING: NONDESTRUCTIVE DEFAULT MODE." >&2
+    echo "Refusing to erase ${DISK} without explicit --confirm-erase-disk flag." >&2
+    exit 3
+fi
+
+# Determine partition device naming (/dev/vda1 vs /dev/nvme0n1p1)
+if [[ "${DISK}" =~ [0-9]$ ]]; then
+    EFI_PART="${DISK}p1"
+    ROOT_PART="${DISK}p2"
+else
+    EFI_PART="${DISK}1"
+    ROOT_PART="${DISK}2"
+fi
+
+TARGET="/mnt/os1-target"
+cleanup() {
+    set +e
+    umount -R "${TARGET}" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "[os1-install] Partitioning ${DISK} with GPT (ESP + ext4 root)..."
+parted -s "${DISK}" mklabel gpt
+parted -s "${DISK}" mkpart ESP fat32 1MiB 257MiB
+parted -s "${DISK}" set 1 esp on
+parted -s "${DISK}" mkpart OS1_ROOT ext4 257MiB 100%
+
+# Wait for kernel/udev to expose partition nodes
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -b "${EFI_PART}" && -b "${ROOT_PART}" ]] && break
+    partprobe "${DISK}" 2>/dev/null || true
+    sleep 1
+done
+
+if [[ ! -b "${EFI_PART}" || ! -b "${ROOT_PART}" ]]; then
+    echo "ERROR: Partition nodes ${EFI_PART} / ${ROOT_PART} did not appear." >&2
+    exit 1
+fi
+
+echo "[os1-install] Formatting ${EFI_PART} (FAT32) and ${ROOT_PART} (ext4)..."
+mkfs.fat -F 32 -n OS1_EFI "${EFI_PART}" >/dev/null
+mkfs.ext4 -F -L OS1_ROOT "${ROOT_PART}" >/dev/null
+
+EFI_UUID="$(blkid -s UUID -o value "${EFI_PART}")"
+ROOT_UUID="$(blkid -s UUID -o value "${ROOT_PART}")"
+ROOT_PARTUUID="$(blkid -s PARTUUID -o value "${ROOT_PART}")"
+
+echo "[os1-install] Mounting target partitions at ${TARGET}..."
+mkdir -p "${TARGET}"
+mount "${ROOT_PART}" "${TARGET}"
+mkdir -p "${TARGET}/boot/efi"
+mount "${EFI_PART}" "${TARGET}/boot/efi"
+
+echo "[os1-install] Copying clean OS-1 rootfs from /run/live/ro..."
+cp -a /run/live/ro/. "${TARGET}/"
+
+echo "[os1-install] Installing OS-1 kernel to /boot/vmlinuz-os1..."
+cp -f /run/live/medium/boot/vmlinuz "${TARGET}/boot/vmlinuz-os1"
+KERNEL_REL="$(uname -r)"
+
+# Remove live-mode marker
+rm -f "${TARGET}/etc/os1-live-mode"
+
+# Update /etc/os-release to reflect installed system
+cat > "${TARGET}/etc/os-release" <<EOF
+PRETTY_NAME="OS-1 0.4-dev (Installed)"
+NAME="OS-1"
+VERSION_ID="0.4"
+VERSION="0.4-dev (Phase 4 Installed)"
+ID=os1
+ID_LIKE=debian
+HOME_URL="https://github.com/mirzotipi-wq/OS-1"
+EOF
+
+# Write real /etc/fstab with UUIDs
+cat > "${TARGET}/etc/fstab" <<EOF
+UUID=${ROOT_UUID}  /          ext4  defaults,noatime,errors=remount-ro  0  1
+UUID=${EFI_UUID}   /boot/efi  vfat  umask=0077                          0  2
+EOF
+
+# Hostname & hosts
+echo "${HOSTNAME_VAL}" > "${TARGET}/etc/hostname"
+cat > "${TARGET}/etc/hosts" <<EOF
+127.0.0.1	localhost
+127.0.1.1	${HOSTNAME_VAL}
+::1		localhost ip6-localhost ip6-loopback
+EOF
+
+# Timezone & locale
+if [[ -f "${TARGET}/usr/share/zoneinfo/${TIMEZONE}" ]]; then
+    ln -sf "/usr/share/zoneinfo/${TIMEZONE}" "${TARGET}/etc/localtime"
+    echo "${TIMEZONE}" > "${TARGET}/etc/timezone"
+fi
+sed -i "s/^# *${LOCALE}/${LOCALE}/" "${TARGET}/etc/locale.gen" || true
+echo "LANG=${LOCALE}" > "${TARGET}/etc/default/locale"
+
+# Configure first user and remove default bring-up user if different
+mount --bind /dev "${TARGET}/dev"
+mount --bind /proc "${TARGET}/proc"
+mount --bind /sys "${TARGET}/sys"
+
+chroot "${TARGET}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
+locale-gen
+if ! id -u '${USERNAME}' >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -G sudo,audio,video,netdev,plugdev '${USERNAME}'
+fi
+echo '${USERNAME}:${PASSWORD}' | chpasswd
+if [[ '${USERNAME}' != 'os1' ]] && id -u os1 >/dev/null 2>&1; then
+    userdel -r os1 || true
+fi
+"
+
+# Generate standalone UEFI GRUB bootloader on ESP (boots directly by PARTUUID, zero initramfs needed)
+echo "[os1-install] Installing standalone x86-64 UEFI GRUB bootloader to ESP..."
+mkdir -p "${TARGET}/boot/grub" "${TARGET}/boot/efi/EFI/BOOT" "${TARGET}/boot/efi/EFI/os1"
+
+cat > "${TARGET}/boot/grub/grub.cfg" <<EOF
+search --no-floppy --set=root --fs-uuid ${ROOT_UUID}
+
+serial --unit=0 --speed=115200
+terminal_input console serial
+terminal_output console serial
+
+set default=0
+set timeout=2
+
+menuentry "OS-1 (${KERNEL_REL})" {
+    linux /boot/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+}
+
+menuentry "OS-1 Single-User Recovery (${KERNEL_REL})" {
+    linux /boot/vmlinuz-os1 root=PARTUUID=${ROOT_PARTUUID} rw single console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+}
+EOF
+
+chroot "${TARGET}" grub-mkstandalone \
+    --format=x86_64-efi \
+    --output=/boot/efi/EFI/BOOT/BOOTX64.EFI \
+    --locales="" \
+    --fonts="" \
+    "boot/grub/grub.cfg=/boot/grub/grub.cfg"
+
+cp -f "${TARGET}/boot/efi/EFI/BOOT/BOOTX64.EFI" "${TARGET}/boot/efi/EFI/os1/grubx64.efi"
+
+sync
+umount -R "${TARGET}"
+trap - EXIT
+
+echo "=== OS-1_INSTALL_COMPLETE ==="
+echo "[os1-install] Installed OS-1 to ${DISK} (ROOT_UUID=${ROOT_UUID}, EFI_UUID=${EFI_UUID})."
+echo "[os1-install] Remove the installation media and reboot."
