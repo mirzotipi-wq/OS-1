@@ -123,6 +123,10 @@ finalize_deb() {
         fi
     done
 
+    # Normalize timestamps for byte-for-byte deterministic .deb archives (Phase 23)
+    export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "${REPO_ROOT}" log -1 --format=%ct 2>/dev/null || date -u +%s)}"
+    find "${pkg_root}" -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
     dpkg-deb --build --root-owner-group "${pkg_root}" "${deb_out}"
 }
 

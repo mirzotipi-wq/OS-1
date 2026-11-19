@@ -21,6 +21,7 @@ def check_workflow(path: str) -> list[str]:
 
     name = os.path.basename(path)
     has_timeout = False
+    has_permissions = False
 
     for lineno, raw in enumerate(lines, start=1):
         line = raw.rstrip("\n")
@@ -28,6 +29,18 @@ def check_workflow(path: str) -> list[str]:
 
         if stripped.startswith("#"):
             continue
+
+        if re.match(r"^permissions\s*:", stripped):
+            has_permissions = True
+
+        # Enforce 40-char commit SHA pinning for third-party actions
+        m_uses = re.match(r"^(?:-\s*)?uses\s*:\s*([^#\s]+)", stripped)
+        if m_uses:
+            ref = m_uses.group(1)
+            if not ref.startswith("./") and "@" in ref:
+                sha = ref.rsplit("@", 1)[1]
+                if not re.match(r"^[0-9a-f]{40}$", sha):
+                    errors.append(f"{name}:{lineno}: action not pinned to 40-char commit SHA: {ref}")
 
         # Disallow continue-on-error: true in required workflows
         if re.match(r"^continue-on-error\s*:\s*true\b", stripped, re.IGNORECASE):
@@ -48,6 +61,8 @@ def check_workflow(path: str) -> list[str]:
 
     if not has_timeout:
         errors.append(f"{name}: missing job-level 'timeout-minutes'")
+    if not has_permissions:
+        errors.append(f"{name}: missing explicit least-privilege 'permissions:' block")
 
     return errors
 

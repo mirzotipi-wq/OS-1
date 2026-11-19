@@ -10,6 +10,9 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: phase5-wayland-${{ github.ref }}
   cancel-in-progress: true
@@ -22,7 +25,7 @@ jobs:
 
     steps:
       - name: Check out OS-1 repository (shallow)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
@@ -54,12 +57,19 @@ jobs:
       - name: Run OS-1 repository audit (T0-AUDIT)
         run: ./distro/tools/os1.sh audit
 
+      - name: Compute exact kernel source & toolchain cache key
+        id: kkey
+        run: |
+          TREE_HASH="$(git rev-parse HEAD:Makefile HEAD:arch/x86 HEAD:drivers HEAD:kernel HEAD:mm HEAD:net HEAD:fs HEAD:include HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
+          GCC_HASH="$(gcc --version | head -n 1 | sha256sum | awk '{print $1}')"
+          echo "key=os1-kernel-x86_64-v3-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
+
       - name: Restore cached OS-1 x86_64 kernel
         id: kernel-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: distro/out/kernel
-          key: os1-kernel-x86_64-mod-${{ hashFiles('Makefile', 'distro/kernel/**', 'distro/tests/kernel-driver-audit.py') }}
+          key: ${{ steps.kkey.outputs.key }}
 
       - name: Build OS-1 x86_64 kernel + modules if cache miss (T1-KBUILD)
         if: steps.kernel-cache.outputs.cache-hit != 'true'
@@ -73,7 +83,7 @@ jobs:
 
       - name: Upload Phase 5 verification artifacts & desktop screenshot (bounded 7-day retention)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: phase5-wayland-desktop-evidence
           retention-days: 7

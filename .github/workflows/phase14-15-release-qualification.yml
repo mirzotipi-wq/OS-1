@@ -5,10 +5,15 @@ on:
     branches:
       - master
       - 'os1/**'
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - master
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: phase14-15-release-${{ github.ref }}
@@ -18,11 +23,11 @@ jobs:
   phase14-15-release-qualification:
     name: Build Native .debs, Full Desktop UEFI Live ISO, SBOM & Clean-Install Qualification
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Check out OS-1 repository (shallow)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
@@ -64,12 +69,19 @@ jobs:
       - name: Run OS-1 repository audit (T0-AUDIT)
         run: ./distro/tools/os1.sh audit
 
+      - name: Compute exact kernel source & toolchain cache key
+        id: kkey
+        run: |
+          TREE_HASH="$(git rev-parse HEAD:Makefile HEAD:arch/x86 HEAD:drivers HEAD:kernel HEAD:mm HEAD:net HEAD:fs HEAD:include HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
+          GCC_HASH="$(gcc --version | head -n 1 | sha256sum | awk '{print $1}')"
+          echo "key=os1-kernel-x86_64-v3-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
+
       - name: Restore cached OS-1 x86_64 kernel
         id: kernel-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: distro/out/kernel
-          key: os1-kernel-x86_64-mod-${{ hashFiles('Makefile', 'distro/kernel/**', 'distro/tests/kernel-driver-audit.py') }}
+          key: ${{ steps.kkey.outputs.key }}
 
       - name: Build OS-1 x86_64 kernel + modules if cache miss (T1-KBUILD)
         if: steps.kernel-cache.outputs.cache-hit != 'true'
@@ -90,14 +102,17 @@ jobs:
       - name: Verify behavioral UFW/nftables firewall traffic blocking & reboot persistence (T17-FIREWALL)
         run: ./distro/tools/os1.sh firewall-test
 
-      - name: Generate CycloneDX 1.5 SBOM & Release SHA256SUMS (T14-SBOM)
+      - name: Generate & strictly validate CycloneDX 1.5 SBOM + Release SHA256SUMS (T14-SBOM / T23-SBOM)
         run: |
           ./distro/tools/os1.sh sbom
+          python3 distro/tests/sbom-verify-test.py --require-iso
           mkdir -p distro/out/release
           (cd distro/out && sha256sum \
             iso/os1-live-x86_64.iso \
             iso/iso-provenance.json \
             images/rootfs-provenance.json \
+            kernel/provenance.json \
+            kernel/driver-manifest.json \
             apt-repo/*.deb \
             apt-repo/Release \
             apt-repo/InRelease \
@@ -116,15 +131,41 @@ jobs:
       - name: Verify installed graphical SDDM login as alice, Wayland apps, first-boot state & reboot persistence (T21-INSTALLED-GUI)
         run: OS1_INSTALL_DISK_GB=10 OS1_DESKTOP_RAM=2560M ./distro/tools/os1.sh installed-desktop-test
 
-      - name: Upload Phase 14-21 Release Qualification Evidence Bundle (7-day retention)
+      - name: Stage durable GitHub Release bundle on tag push (T23-RELEASE-STAGE)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          source distro/VERSION
+          mkdir -p distro/out/release-bundle
+          cp -f distro/out/iso/os1-live-x86_64.iso "distro/out/release-bundle/os1-${OS1_VERSION}-x86_64.iso"
+          cp -f distro/out/apt-repo/*.deb distro/out/release-bundle/
+          cp -f distro/out/apt-repo/Release distro/out/apt-repo/InRelease distro/out/apt-repo/Release.gpg \
+                distro/out/apt-repo/Packages distro/out/apt-repo/Packages.gz \
+                distro/out/apt-repo/os1-archive-keyring.gpg distro/out/release-bundle/
+          cp -f distro/out/release/os1-sbom.cdx.json distro/out/kernel/provenance.json \
+                distro/out/kernel/driver-manifest.json distro/out/iso/iso-provenance.json \
+                distro/out/release-bundle/
+          (cd distro/out/release-bundle && sha256sum * > SHA256SUMS)
+          ls -lh distro/out/release-bundle
+
+      - name: Upload durable release bundle for tag publication
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: os1-release-bundle
+          retention-days: 7
+          path: distro/out/release-bundle/*
+
+      - name: Upload Phase 14-23 Release Qualification Evidence Bundle (7-day retention)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: phase14-15-release-qualification-evidence
           retention-days: 7
           path: |
             distro/out/release/os1-sbom.cdx.json
             distro/out/release/SHA256SUMS
+            distro/out/kernel/provenance.json
+            distro/out/kernel/driver-manifest.json
             distro/out/apt-repo/Release
             distro/out/apt-repo/InRelease
             distro/out/apt-repo/Release.gpg
@@ -135,3 +176,44 @@ jobs:
             distro/out/images/rootfs-provenance.json
             distro/out/screenshots/*.png
             distro/out/logs/*.log
+
+  publish-release:
+    name: Publish Qualified OS-1 GitHub Release Assets
+    needs: phase14-15-release-qualification
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Download qualified OS-1 release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: os1-release-bundle
+          path: release-bundle
+
+      - name: Publish GitHub Release with exact qualified assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          source distro/VERSION
+          NOTES="OS-1 ${OS1_VERSION} (${TAG}) — Qualified x86-64 UEFI Release Candidate.
+
+          - Automated CI-Verified (Tier 0 QEMU/OVMF): kernel + modules (69 driver symbols), UFW/nftables behavioral firewall, preflight-safe/credential-safe installer, 8 native .deb packages + versioned kernel .deb, signed APT repo + GRUB rollback, full installed SDDM/Wayland desktop session, CycloneDX 1.5 SBOM, and byte-for-byte .deb reproducibility.
+          - Hardware-Gated (Tier 1): Physical Intel/AMD bare-metal UEFI testing required before 1.0 GA (see docs/SUPPORTED_HARDWARE.md).
+          - Human/Legal-Gated: Human accessibility review, legal/trade-dress review, and offline production GPG key custody required before 1.0 GA."
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-bundle/* --clobber
+          else
+            gh release create "${TAG}" release-bundle/* \
+              --title "OS-1 ${OS1_VERSION} (${TAG})" \
+              --prerelease \
+              --notes "${NOTES}"
+          fi

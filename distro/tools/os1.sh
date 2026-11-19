@@ -48,6 +48,8 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
             "${REPO_ROOT}/distro/tests/package-verify-test.py" \
             "${REPO_ROOT}/distro/tests/firstboot-state-test.py" \
+            "${REPO_ROOT}/distro/tests/sbom-verify-test.py" \
+            "${REPO_ROOT}/distro/tests/reproducibility-check.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
@@ -67,6 +69,10 @@ case "${cmd}" in
         python3 "${REPO_ROOT}/distro/tests/package-verify-test.py"
         echo "First-boot preference & shell-init unit test:"
         python3 "${REPO_ROOT}/distro/tests/firstboot-state-test.py"
+        echo "SBOM generator & validator self-test:"
+        python3 "${REPO_ROOT}/distro/tests/sbom-verify-test.py" --self-test
+        echo "Native .deb byte-for-byte reproducibility check:"
+        python3 "${REPO_ROOT}/distro/tests/reproducibility-check.py"
         echo "Disk space:"
         df -h "${REPO_ROOT}"
         ;;
