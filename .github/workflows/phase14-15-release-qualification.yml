@@ -69,9 +69,9 @@ jobs:
           path: distro/out/kernel
           key: os1-kernel-x86_64-${{ hashFiles('Makefile', 'distro/kernel/os1_x86_64.fragment', 'distro/kernel/build-kernel.sh') }}
 
-      - name: Build OS-1 x86_64 kernel if cache miss (T1-KBUILD)
+      - name: Build OS-1 x86_64 kernel + modules if cache miss (T1-KBUILD)
         if: steps.kernel-cache.outputs.cache-hit != 'true'
-        run: ./distro/tools/os1.sh kernel
+        run: ./distro/tools/os1.sh kernel --with-modules
 
       - name: Build native OS-1 .deb packages & local APT repository (T14-DEBS)
         run: ./distro/tools/os1.sh debs
@@ -80,6 +80,9 @@ jobs:
         run: |
           sudo OS1_PROFILE=desktop OS1_DESKTOP_AUTOLOGIN=1 ./distro/tools/os1.sh rootfs
           sudo ./distro/tools/os1.sh iso
+
+      - name: Verify behavioral UFW/nftables firewall traffic blocking & reboot persistence (T17-FIREWALL)
+        run: ./distro/tools/os1.sh firewall-test
 
       - name: Generate CycloneDX 1.5 SBOM & Release SHA256SUMS (T14-SBOM)
         run: |
@@ -98,7 +101,7 @@ jobs:
       - name: Boot full Desktop UEFI Live ISO + Recovery Mode in QEMU/OVMF (T15-ISO-BOOT)
         run: ./distro/tools/os1.sh iso-test
 
-      - name: Clean-install full Desktop ISO to 10 GiB disk, detach ISO & verify 2 reboots + UFW/Orca/fs (T15-DESKTOP-INSTALL)
+      - name: Clean-install full Desktop ISO to 10 GiB disk, detach ISO & verify 2 reboots + active UFW/nft/Orca/fs (T15-DESKTOP-INSTALL)
         run: OS1_INSTALL_DISK_GB=10 OS1_INSTALL_RAM=2048M ./distro/tools/os1.sh install-test
 
       - name: Upload Phase 14-15 Release Qualification Evidence Bundle (7-day retention)

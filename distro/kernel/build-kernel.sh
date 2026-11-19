@@ -94,7 +94,16 @@ make -C "${REPO_ROOT}" O="${BUILD_DIR}" ARCH=x86_64 olddefconfig
 cp -f "${BUILD_DIR}/.config" "${ARTIFACT_DIR}/os1_x86_64.config"
 
 # Verify critical OS-1 options survived olddefconfig
-for sym in CONFIG_LOCALVERSION=\"-os1\" CONFIG_VIRTIO_BLK=y CONFIG_SERIAL_8250_CONSOLE=y CONFIG_BLK_DEV_INITRD=y CONFIG_EFI_STUB=y; do
+for sym in \
+    CONFIG_LOCALVERSION=\"-os1\" \
+    CONFIG_VIRTIO_BLK=y \
+    CONFIG_SERIAL_8250_CONSOLE=y \
+    CONFIG_BLK_DEV_INITRD=y \
+    CONFIG_EFI_STUB=y \
+    CONFIG_NETFILTER=y \
+    CONFIG_NF_TABLES=y \
+    CONFIG_NFT_COMPAT=y \
+    CONFIG_NF_CONNTRACK=y; do
     if ! grep -Fq "${sym}" "${ARTIFACT_DIR}/os1_x86_64.config"; then
         echo "ERROR: Expected Kconfig symbol missing after merge: ${sym}" >&2
         exit 1
@@ -132,6 +141,9 @@ if (( BUILD_MODULES == 1 )); then
     make -C "${REPO_ROOT}" O="${BUILD_DIR}" ARCH=x86_64 -j"${JOBS}" modules
     rm -rf "${ARTIFACT_DIR}/modules"
     make -C "${REPO_ROOT}" O="${BUILD_DIR}" ARCH=x86_64 INSTALL_MOD_PATH="${ARTIFACT_DIR}/modules" modules_install
+    if command -v depmod >/dev/null 2>&1; then
+        depmod -b "${ARTIFACT_DIR}/modules" "${KERNEL_RELEASE}"
+    fi
 fi
 
 GIT_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"

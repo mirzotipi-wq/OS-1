@@ -74,7 +74,10 @@ jobs:
       - name: Run automated QEMU Phase 2 userspace, networking, APT & reboot persistence test (T2-ROOTFS)
         run: ./distro/tools/os1.sh userspace-test
 
-      - name: Upload Phase 2 verification artifacts (bounded 7-day retention)
+      - name: Run automated QEMU Phase 17 behavioral firewall traffic & reboot test (T17-FIREWALL)
+        run: ./distro/tools/os1.sh firewall-test
+
+      - name: Upload Phase 2 & 17 verification artifacts (bounded 7-day retention)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -84,5 +87,4 @@ jobs:
             distro/out/kernel/provenance.json
             distro/out/images/rootfs-provenance.json
             distro/out/images/rootfs-packages.tsv
-            distro/out/logs/qemu-phase2-boot1.log
-            distro/out/logs/qemu-phase2-boot2.log
+            distro/out/logs/*.log

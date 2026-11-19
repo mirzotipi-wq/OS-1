@@ -259,14 +259,23 @@ def main() -> int:
                     raise RuntimeError(f"Installed system check missing {needle!r}:\n{out}")
             print("[PASS] Installed disk booted via UEFI on OS-1 kernel with ext4 root & custom config", flush=True)
 
-            # If full desktop ISO was installed, log runtime service health and verify static/fs checks honestly
+            # Phase 17 mandatory runtime firewall gate on installed Boot 1
+            fw_out = vm_inst1.run_cmd(
+                "test \"$(systemctl is-active ufw.service)\" = 'active' && "
+                "test \"$(systemctl is-failed ufw.service || true)\" != 'failed' && "
+                "printf 'alicepass\\n' | sudo -S ufw status verbose && "
+                "printf 'alicepass\\n' | sudo -S nft list ruleset",
+                "UFW_BOOT1",
+                timeout=30.0,
+            )
+            for needle in ("Status: active", "deny (incoming)", "allow (outgoing)", "ufw-before-input"):
+                if needle not in fw_out:
+                    raise RuntimeError(f"Installed Boot 1 runtime firewall check missing {needle!r}:\n{fw_out[-1200:]}")
+            print("[PASS][FUNC] Installed Boot 1 runtime firewall active (ufw.service + nftables deny incoming)", flush=True)
+
+            # If full desktop ISO was installed, verify desktop a11y binary & fs suite
             vm_inst1.run_cmd(
                 "if [ -f /usr/share/os1/apps-manifest.json ]; then "
-                "  echo '=== SYSTEMD FAILED UNITS (DIAGNOSTIC) ==='; "
-                "  systemctl --failed --no-pager || true; "
-                "  echo \"UFW_SERVICE_STATE=$(systemctl is-active ufw.service 2>&1 || true)\"; "
-                "  grep -q 'ENABLED=yes' /etc/ufw/ufw.conf && "
-                "  grep -q 'DEFAULT_INPUT_POLICY=\"DROP\"' /etc/default/ufw && "
                 "  command -v orca >/dev/null && "
                 "  os1-fs-test && "
                 "  echo DESKTOP_QUAL_OK; "
@@ -274,7 +283,7 @@ def main() -> int:
                 "DESKTOPQUAL",
                 timeout=60.0,
             )
-            print("[PASS][STATIC+FUNC] Desktop profile static UFW/Orca presence & os1-fs-test passed (runtime UFW gate enforced in Phase 17)", flush=True)
+            print("[PASS][FUNC] Installed desktop profile fs suite & a11y baseline verified", flush=True)
 
             # Networking + APT update + install jq
             vm_inst1.run_cmd(
@@ -283,8 +292,8 @@ def main() -> int:
                 timeout=90.0,
             )
             vm_inst1.run_cmd(
-                "echo alicepass | sudo -S apt-get update && "
-                "echo alicepass | sudo -S env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq",
+                "printf 'alicepass\\n' | sudo -S apt-get update && "
+                "printf 'alicepass\\n' | sudo -S env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq",
                 "INSTAPT",
                 timeout=300.0,
             )
@@ -302,13 +311,15 @@ def main() -> int:
         try:
             vm_inst2.login("os1-installed", "alice", "alicepass")
             out = vm_inst2.run_cmd(
-                "cat /home/alice/installed-proof.txt && jq --version && uname -r",
+                "cat /home/alice/installed-proof.txt && jq --version && uname -r && "
+                "test \"$(systemctl is-active ufw.service)\" = 'active' && "
+                "printf 'alicepass\\n' | sudo -S ufw status verbose",
                 "INSTPERSIST",
                 timeout=30.0,
             )
-            if token not in out or "jq-" not in out or "7.4.0-rc3-os1" not in out:
-                raise RuntimeError(f"Second reboot persistence check failed:\n{out}")
-            print("[PASS] Installed disk survived second reboot with file + 'jq' intact!", flush=True)
+            if token not in out or "jq-" not in out or "7.4.0-rc3-os1" not in out or "Status: active" not in out:
+                raise RuntimeError(f"Second reboot persistence/firewall check failed:\n{out}")
+            print("[PASS][E2E] Installed disk survived second reboot with file, 'jq', and active UFW firewall intact!", flush=True)
             vm_inst2.poweroff_and_wait("alicepass")
         finally:
             vm_inst2.close()
@@ -318,6 +329,9 @@ def main() -> int:
                 text = f.read().decode("utf-8", errors="replace")
             if "Kernel panic" in text or "Oops:" in text:
                 print(f"ERROR: Kernel panic or Oops in {lp}", file=sys.stderr)
+                return 1
+            if "Failed to start ufw.service" in text:
+                print(f"ERROR: ufw.service failed during boot in {lp}", file=sys.stderr)
                 return 1
 
         print("[os1-phase4-test] ALL PHASE 4 CLEAN-DISK INSTALL & REBOOT ASSERTIONS PASSED.", flush=True)

@@ -56,6 +56,8 @@ PACKAGES=(
     util-linux
     login
     passwd
+    ufw
+    nftables
 )
 
 DESKTOP_PACKAGES=(
@@ -239,6 +241,15 @@ if [[ -d "${OUT_ROOT}/kernel/modules/lib/modules" ]]; then
     cp -a "${OUT_ROOT}/kernel/modules/lib/modules/." "${ROOTFS_DIR}/lib/modules/"
 fi
 
+# Phase 17 security baseline: UFW default-deny incoming / allow outgoing (all profiles)
+if [[ -f "${ROOTFS_DIR}/etc/ufw/ufw.conf" ]]; then
+    sed -i 's/^ENABLED=.*/ENABLED=yes/' "${ROOTFS_DIR}/etc/ufw/ufw.conf"
+fi
+if [[ -f "${ROOTFS_DIR}/etc/default/ufw" ]]; then
+    sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "${ROOTFS_DIR}/etc/default/ufw"
+    sed -i 's/^DEFAULT_OUTPUT_POLICY=.*/DEFAULT_OUTPUT_POLICY="ACCEPT"/' "${ROOTFS_DIR}/etc/default/ufw"
+fi
+
 # Configure inside chroot
 chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive bash -euo pipefail -c "
 locale-gen
@@ -251,6 +262,12 @@ fi
 echo '${DEV_USER}:${DEV_PASS}' | chpasswd
 systemctl enable NetworkManager.service
 systemctl enable serial-getty@ttyS0.service
+systemctl enable ufw.service
+if [ -d /lib/modules ]; then
+    for kdir in /lib/modules/*; do
+        [ -d \"\$kdir\" ] && depmod -a \"\$(basename \"\$kdir\")\"
+    done
+fi
 "
 
 # Sudo policy (standard least-privilege password-authenticated sudo for %sudo)
@@ -357,18 +374,6 @@ fc-cache -f || true
     install -m 0755 "${REPO_ROOT}/distro/shell/bin/os1-accessibility" "${ROOTFS_DIR}/usr/local/bin/os1-accessibility"
     install -m 0755 "${REPO_ROOT}/distro/installer/os1-firstboot" "${ROOTFS_DIR}/usr/local/bin/os1-firstboot"
     install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${ROOTFS_DIR}/usr/local/bin/os1-fs-test"
-
-    # Phase 14 security baseline: UFW default-deny incoming / allow outgoing
-    if [[ -f "${ROOTFS_DIR}/etc/ufw/ufw.conf" ]]; then
-        sed -i 's/^ENABLED=.*/ENABLED=yes/' "${ROOTFS_DIR}/etc/ufw/ufw.conf"
-    fi
-    if [[ -f "${ROOTFS_DIR}/etc/default/ufw" ]]; then
-        sed -i 's/^DEFAULT_INPUT_POLICY=.*/DEFAULT_INPUT_POLICY="DROP"/' "${ROOTFS_DIR}/etc/default/ufw"
-        sed -i 's/^DEFAULT_OUTPUT_POLICY=.*/DEFAULT_OUTPUT_POLICY="ACCEPT"/' "${ROOTFS_DIR}/etc/default/ufw"
-    fi
-    chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash -euo pipefail -c "
-        systemctl enable ufw.service || true
-    "
 fi
 
 # Install OS-1 UEFI system installer into rootfs

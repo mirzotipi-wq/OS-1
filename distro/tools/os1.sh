@@ -43,6 +43,7 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
             "${REPO_ROOT}/distro/tests/fs-operations-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-install-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-wayland-test.py"; do
@@ -68,6 +69,9 @@ case "${cmd}" in
         ;;
     userspace-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-userspace-test.py" "$@"
+        ;;
+    firewall-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" "$@"
         ;;
     iso)
         exec "${REPO_ROOT}/distro/build/build-iso.sh" "$@"

@@ -20,8 +20,8 @@
 
 ## Phases 16–24 Mission Tracker
 
-- [ ] **Phase 16 — CI Truthfulness & Test-Harness Repair:** Baseline audit written, `ci-integrity-test.py` added to `audit`, `os1-accessibility` DBus timeout bounded, `qemu-wayland-test.py` split into bounded steps with full failure diagnostics, `STATUS.md`/`TEST_MATRIX.md`/`KNOWN_GAPS.md` reconciled. *(Awaiting CI verification)*
-- [ ] **Phase 17 — Firewall & Network-Security Correction:** Pending.
+- [x] **Phase 16 — CI Truthfulness & Test-Harness Repair (`54e10b3d2`):** Baseline audit written, `ci-integrity-test.py` enforced in `audit`, `os1-accessibility` DBus timeout bounded, `qemu-wayland-test.py` split into bounded steps with full failure diagnostics. Verified CI: Phase 1 (`44501470669` PASS), Phase 2 (`44501470566` PASS), Phase 4 (`44501470642` PASS), Phase 5 (`44501470555` PASS in 10m50s).
+- [ ] **Phase 17 — Firewall & Network-Security Correction:** Kernel `nf_tables`/`nft_compat`/`nf_conntrack`/xtables enabled, `ADR-firewall-backend.md` & `SECURITY_MODEL.md` added, UFW + `nftables` enabled for all profiles, `qemu-firewall-test.py` & installed-system runtime UFW/nftables gates added. *(Awaiting CI verification)*
 - [ ] **Phase 18 — Installer Safety, Credential Handling & System Identity:** Pending.
 - [ ] **Phase 19 — Package Correctness & Package-Owned System Assembly:** Pending.
 - [ ] **Phase 20 — Signed Updates, Versioned Kernel Packages & Rollback:** Pending.
