@@ -378,7 +378,9 @@ def main() -> int:
             # Test os1-firstboot partial update preservation + dark mode + fs-test + notify + orca
             vm.run_cmd(
                 "UID_ALICE=$(id -u alice); "
-                "export XDG_RUNTIME_DIR=/run/user/$UID_ALICE DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID_ALICE/bus; "
+                "export XDG_RUNTIME_DIR=/run/user/$UID_ALICE "
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID_ALICE/bus "
+                "WAYLAND_DISPLAY=wayland-0 QT_QPA_PLATFORM=wayland; "
                 "os1-firstboot --apply --appearance dark && "
                 "os1-firstboot --apply --reduced-motion on && "
                 "grep -q 'appearance=dark' /home/alice/.config/os1-onboarding.conf && "
