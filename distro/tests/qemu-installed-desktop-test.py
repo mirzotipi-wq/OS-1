@@ -229,6 +229,16 @@ class QemuVM:
         assert last_err is not None
         raise last_err
 
+    def poweroff(self, password: str, timeout: float = 120.0) -> None:
+        assert self.proc is not None
+        self.sendline(f"sync && printf '{password}\\n' | sudo -S systemctl poweroff --ignore-inhibitors")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                return
+            self._read_chunk(0.5)
+        raise TimeoutError(f"Timed out after {timeout}s waiting for clean VM poweroff")
+
 
 def main() -> int:
     if not os.path.isfile(ISO_PATH):
@@ -397,8 +407,7 @@ def main() -> int:
             )
             print(f"[PASS][P21] First-boot preference preservation, Dark mode ({w}x{h}), fs-test & Orca verified", flush=True)
 
-            vm.sendline(f"printf '{alice_pass}\\n' | sudo -S poweroff")
-            vm.proc.wait(timeout=60)
+            vm.poweroff(alice_pass, timeout=120.0)
 
         # --- Step 3: Boot 2 — Reboot Persistence + Second Graphical Login as alice ---
         with QemuVM(desktop_boot_cmd(), os.path.join(LOG_DIR, "qemu-phase21-boot2-persist.log"), mon_sock) as vm:
@@ -411,7 +420,10 @@ def main() -> int:
                 "PERSIST_AND_GREETER2",
                 timeout=120.0,
             )
-            time.sleep(4)
+            vm.screenshot(
+                os.path.join(tmp, "greeter2.ppm"),
+                os.path.join(SHOT_DIR, "phase21-sddm-greeter-boot2.png"),
+            )
             vm.type_password_via_sendkey(alice_pass)
             vm.run_cmd(
                 "UID_ALICE=$(id -u alice); "
@@ -425,8 +437,7 @@ def main() -> int:
                 timeout=150.0,
             )
             print("[PASS][P21] Boot 2 graphical SDDM login & onboarding preference persistence verified", flush=True)
-            vm.sendline(f"printf '{alice_pass}\\n' | sudo -S poweroff")
-            vm.proc.wait(timeout=60)
+            vm.poweroff(alice_pass, timeout=120.0)
 
     print("[os1-phase21] ALL INSTALLED GRAPHICAL USER JOURNEY TESTS PASSED.", flush=True)
     return 0
