@@ -88,6 +88,7 @@ def main() -> int:
             ],
         })
 
+    os1_pkg_names: set[str] = set()
     apt_repo = os.path.join(out_root, "apt-repo")
     if os.path.isdir(apt_repo):
         for fname in sorted(os.listdir(apt_repo)):
@@ -97,6 +98,7 @@ def main() -> int:
             parts = fname.split("_")
             pkg_name = parts[0]
             pkg_ver = parts[1] if len(parts) > 1 else "1.0.0"
+            os1_pkg_names.add(pkg_name)
             components.append({
                 "type": "application",
                 "name": pkg_name,
@@ -127,6 +129,8 @@ def main() -> int:
                 if len(parts) < 3:
                     continue
                 name, ver, arch = parts[0], parts[1], parts[2]
+                if name in os1_pkg_names:
+                    continue
                 components.append({
                     "type": "library",
                     "name": name,
