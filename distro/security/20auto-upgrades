@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// OS-1 automatic security update schedule
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";

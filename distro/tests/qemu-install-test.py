@@ -296,8 +296,11 @@ def main() -> int:
                 "INSTCHECK",
                 timeout=30.0,
             )
+            from os1_test_util import expected_kernel_release
+            expected_krel = expected_kernel_release(repo_root, out_root)
+
             for needle in (
-                "7.4.0-rc3-os1",
+                expected_krel,
                 "UEFI_OK",
                 "ext4",
                 "NOT_LIVE",
@@ -309,7 +312,7 @@ def main() -> int:
             ):
                 if needle not in out:
                     raise RuntimeError(f"Installed system check missing {needle!r}:\n{out}")
-            print("[PASS][E2E] Installed disk booted via UEFI with special-char password, no live user, no SDDM autologin", flush=True)
+            print(f"[PASS][E2E] Installed disk booted via UEFI ({expected_krel}) with special-char password, no live user, no SDDM autologin", flush=True)
 
             # Phase 17 mandatory runtime firewall gate on installed Boot 1
             fw_out = vm_inst1.run_cmd(
@@ -325,17 +328,30 @@ def main() -> int:
                     raise RuntimeError(f"Installed Boot 1 runtime firewall check missing {needle!r}:\n{fw_out[-1200:]}")
             print("[PASS][FUNC] Installed Boot 1 runtime firewall active (ufw.service + nftables deny incoming)", flush=True)
 
+            # Verify AppArmor LSM, sysctl hardening, and zram swap on installed Boot 1
+            hard_out = vm_inst1.run_cmd(
+                "cat /sys/module/apparmor/parameters/enabled && "
+                "sysctl -n kernel.kptr_restrict kernel.dmesg_restrict kernel.yama.ptrace_scope && "
+                "swapon --show --noheadings",
+                "HARDENING_BOOT1",
+                timeout=30.0,
+            )
+            if "Y" not in hard_out or "zram" not in hard_out:
+                raise RuntimeError(f"Installed Boot 1 hardening/zram check failed:\n{hard_out}")
+            print("[PASS][FUNC] Installed Boot 1 AppArmor LSM, sysctl hardening, and zram swap verified", flush=True)
+
             # If full desktop ISO was installed, verify desktop a11y binary & fs suite
             vm_inst1.run_cmd(
                 "if [ -f /usr/share/os1/apps-manifest.json ]; then "
                 "  command -v orca >/dev/null && "
+                "  command -v flatpak >/dev/null && "
                 "  os1-fs-test && "
                 "  echo DESKTOP_QUAL_OK; "
                 "else echo MINIMAL_PROFILE_OK; fi",
                 "DESKTOPQUAL",
                 timeout=60.0,
             )
-            print("[PASS][FUNC] Installed desktop profile fs suite & a11y baseline verified", flush=True)
+            print("[PASS][FUNC] Installed desktop profile fs suite, Flatpak & a11y baseline verified", flush=True)
 
             # Networking + APT update + install jq
             vm_inst1.run_cmd(
@@ -377,7 +393,7 @@ def main() -> int:
                 "INSTPERSIST",
                 timeout=30.0,
             )
-            if token not in out or "jq-" not in out or "7.4.0-rc3-os1" not in out or "Status: active" not in out:
+            if token not in out or "jq-" not in out or expected_krel not in out or "Status: active" not in out:
                 raise RuntimeError(f"Second reboot persistence/firewall check failed:\n{out}")
             print("[PASS][E2E] Installed disk survived second reboot with file, 'jq', and active UFW firewall intact!", flush=True)
             vm_inst2.sendline(f"{sudo_alice} systemctl poweroff")

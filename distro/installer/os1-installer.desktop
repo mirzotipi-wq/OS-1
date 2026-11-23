@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Install OS-1
+GenericName=OS-1 System Installer
+Comment=Install OS-1 GNU/Linux onto your computer
+Exec=/usr/bin/os1-install-gui
+Icon=os1-logo
+Terminal=false
+Categories=System;Settings;
+Keywords=install;setup;os1;disk;encryption;

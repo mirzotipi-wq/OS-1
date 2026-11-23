@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# OS-1 Machine Owner Key (MOK) UEFI Secure Boot signing & enrollment helper.
+# Allows users who want Secure Boot enabled with OS-1's custom LTS kernel to
+# generate, enroll, and sign kernels/EFI binaries with their own local MOK.
+set -euo pipefail
+
+MOK_DIR="${OS1_MOK_DIR:-/etc/os1/mok}"
+MOK_KEY="${MOK_DIR}/os1-mok.key"
+MOK_CRT="${MOK_DIR}/os1-mok.crt"
+MOK_DER="${MOK_DIR}/os1-mok.der"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <command> [args...]
+
+Commands:
+  status                 Show UEFI Secure Boot state and local MOK key status
+  generate-key           Generate a local RSA-3072 X.509 MOK keypair under ${MOK_DIR}
+  enroll                 Queue ${MOK_DER} for MOK Manager enrollment on next reboot (mokutil --import)
+  sign <binary>          Sign an EFI binary or Linux EFI-stub kernel in-place with sbsign
+  verify <binary>        Verify an EFI binary signature against ${MOK_CRT}
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "${cmd}" in
+    status)
+        echo "=== OS-1 UEFI Secure Boot / MOK Status ==="
+        if command -v mokutil >/dev/null 2>&1; then
+            mokutil --sb-state 2>&1 || true
+        else
+            echo "mokutil: not installed"
+        fi
+        if [[ -f "${MOK_CRT}" ]]; then
+            echo "Local MOK certificate: ${MOK_CRT}"
+            openssl x509 -in "${MOK_CRT}" -noout -subject -dates -fingerprint -sha256 2>/dev/null || true
+        else
+            echo "Local MOK certificate: not generated yet (run: sudo os1-mok-sign generate-key)"
+        fi
+        ;;
+    generate-key)
+        if [[ "$(id -u)" -ne 0 ]]; then
+            echo "ERROR: generate-key must run as root." >&2
+            exit 1
+        fi
+        for tool in openssl; do
+            command -v "${tool}" >/dev/null 2>&1 || { echo "ERROR: missing ${tool}" >&2; exit 1; }
+        done
+        mkdir -p "${MOK_DIR}"
+        chmod 0700 "${MOK_DIR}"
+        if [[ -f "${MOK_KEY}" && -f "${MOK_CRT}" ]]; then
+            echo "[os1-mok] Existing MOK keypair already present at ${MOK_DIR}; refusing to overwrite." >&2
+            exit 1
+        fi
+        openssl req -new -x509 -newkey rsa:3072 -nodes -days 3650 \
+            -subj "/CN=OS-1 Local Machine Owner Key ($(hostname -s))/" \
+            -keyout "${MOK_KEY}" -out "${MOK_CRT}"
+        openssl x509 -in "${MOK_CRT}" -outform DER -out "${MOK_DER}"
+        chmod 0600 "${MOK_KEY}"
+        chmod 0644 "${MOK_CRT}" "${MOK_DER}"
+        echo "[os1-mok] Generated MOK keypair under ${MOK_DIR}"
+        echo "[os1-mok] Next: run 'sudo os1-mok-sign enroll' and reboot to confirm in MOK Manager."
+        ;;
+    enroll)
+        if [[ "$(id -u)" -ne 0 ]]; then
+            echo "ERROR: enroll must run as root." >&2
+            exit 1
+        fi
+        command -v mokutil >/dev/null 2>&1 || { echo "ERROR: mokutil not installed" >&2; exit 1; }
+        [[ -f "${MOK_DER}" ]] || { echo "ERROR: ${MOK_DER} not found. Run 'sudo os1-mok-sign generate-key' first." >&2; exit 1; }
+        mokutil --import "${MOK_DER}"
+        ;;
+    sign)
+        target="${1:-}"
+        if [[ -z "${target}" || ! -f "${target}" ]]; then
+            echo "ERROR: Provide an existing EFI binary or vmlinuz file to sign." >&2
+            exit 2
+        fi
+        command -v sbsign >/dev/null 2>&1 || { echo "ERROR: sbsign (sbsigntool) not installed" >&2; exit 1; }
+        [[ -f "${MOK_KEY}" && -f "${MOK_CRT}" ]] || { echo "ERROR: MOK keypair missing under ${MOK_DIR}" >&2; exit 1; }
+        tmp="${target}.signed.$$"
+        sbsign --key "${MOK_KEY}" --cert "${MOK_CRT}" --output "${tmp}" "${target}"
+        mv -f "${tmp}" "${target}"
+        sbverify --cert "${MOK_CRT}" "${target}"
+        echo "[os1-mok] Signed and verified: ${target}"
+        ;;
+    verify)
+        target="${1:-}"
+        if [[ -z "${target}" || ! -f "${target}" ]]; then
+            echo "ERROR: Provide an existing EFI binary or vmlinuz file to verify." >&2
+            exit 2
+        fi
+        command -v sbverify >/dev/null 2>&1 || { echo "ERROR: sbverify (sbsigntool) not installed" >&2; exit 1; }
+        sbverify --cert "${MOK_CRT}" "${target}"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo "ERROR: Unknown command: ${cmd}" >&2
+        usage
+        exit 2
+        ;;
+esac

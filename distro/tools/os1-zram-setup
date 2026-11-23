@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# OS-1 deterministic compressed RAM swap (zram) setup helper.
+set -euo pipefail
+
+ACTION="${1:-start}"
+
+case "${ACTION}" in
+    start)
+        if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/dev/zram0'; then
+            echo "[os1-zram] /dev/zram0 is already active."
+            exit 0
+        fi
+        if [[ ! -b /dev/zram0 ]]; then
+            modprobe zram num_devices=1 2>/dev/null || true
+        fi
+        if [[ ! -b /dev/zram0 ]]; then
+            echo "[os1-zram] WARN: /dev/zram0 not available in kernel; skipping zram swap." >&2
+            exit 0
+        fi
+
+        mem_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+        # 50% of RAM, clamped between 256 MiB and 4096 MiB
+        zram_mb=$(( mem_kb / 2048 ))
+        if (( zram_mb < 256 )); then
+            zram_mb=256
+        elif (( zram_mb > 4096 )); then
+            zram_mb=4096
+        fi
+
+        algo="zstd"
+        if [[ -r /sys/block/zram0/comp_algorithm ]]; then
+            if ! grep -qw zstd /sys/block/zram0/comp_algorithm; then
+                if grep -qw lz4 /sys/block/zram0/comp_algorithm; then
+                    algo="lz4"
+                else
+                    algo="lzo"
+                fi
+            fi
+        fi
+
+        zramctl --reset /dev/zram0 2>/dev/null || true
+        zramctl /dev/zram0 --algorithm "${algo}" --size "${zram_mb}M"
+        mkswap -L OS1_ZRAM /dev/zram0 >/dev/null
+        swapon -p 100 /dev/zram0
+        echo "[os1-zram] Activated /dev/zram0 (${zram_mb} MiB, algo=${algo}, priority=100)"
+        ;;
+    stop)
+        if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/dev/zram0'; then
+            swapoff /dev/zram0
+        fi
+        zramctl --reset /dev/zram0 2>/dev/null || true
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}" >&2
+        exit 2
+        ;;
+esac

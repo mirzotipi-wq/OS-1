@@ -67,6 +67,21 @@ REQUIRED_BUILTIN = {
         "CONFIG_TCG_TIS",
         "CONFIG_TCG_CRB",
     ],
+    "security_hardening": [
+        "CONFIG_SECURITY_APPARMOR",
+        "CONFIG_DEFAULT_SECURITY_APPARMOR",
+        "CONFIG_SECURITY_YAMA",
+        "CONFIG_HARDENED_USERCOPY",
+        "CONFIG_STACKPROTECTOR_STRONG",
+    ],
+    "encryption_memory": [
+        "CONFIG_BLK_DEV_DM",
+        "CONFIG_DM_CRYPT",
+        "CONFIG_CRYPTO_AES",
+        "CONFIG_CRYPTO_XTS",
+        "CONFIG_CRYPTO_SHA256",
+        "CONFIG_ZRAM",
+    ],
 }
 
 # Built-in or loadable module (=y or =m) required for physical x86-64 hardware readiness

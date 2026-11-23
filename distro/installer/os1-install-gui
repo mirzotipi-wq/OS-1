@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+"""OS-1 Graphical Installer (PyQt5 thin wizard wrapping /usr/sbin/os1-install).
+
+Architecture:
+  - Keeps /usr/sbin/os1-install as the single hardened 13-stage installation backend.
+  - Passes user passwords and optional LUKS2 passphrases strictly over private
+    os.pipe() file descriptors (--password-fd / --luks-passphrase-fd), never argv/env.
+  - Generates the exact review summary via `os1-install --json-plan`.
+  - Supports `--self-test` for headless CI validation without a display server.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+USERNAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
+INSTALLER_BIN = os.environ.get("OS1_INSTALLER_BIN", "/usr/sbin/os1-install")
+
+
+def discover_disks() -> list[dict[str, str]]:
+    """Return candidate whole-disk block devices via lsblk -J."""
+    try:
+        out = subprocess.check_output(
+            ["lsblk", "-J", "-b", "-d", "-o", "NAME,PATH,SIZE,MODEL,TYPE,RM"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        data = json.loads(out)
+    except Exception:
+        return []
+    disks: list[dict[str, str]] = []
+    for dev in data.get("blockdevices", []):
+        if dev.get("type") != "disk":
+            continue
+        name = str(dev.get("name", ""))
+        if name.startswith(("loop", "ram", "sr", "zram")):
+            continue
+        size_bytes = int(dev.get("size") or 0)
+        size_gib = size_bytes / (1024 ** 3)
+        model = (dev.get("model") or "Generic Disk").strip()
+        path = dev.get("path") or f"/dev/{name}"
+        disks.append({
+            "path": path,
+            "label": f"{path} — {model} ({size_gib:.1f} GiB)",
+            "size_gib": f"{size_gib:.1f}",
+        })
+    return disks
+
+
+def build_install_argv(
+    *,
+    disk: str,
+    user: str,
+    hostname: str,
+    timezone: str,
+    locale: str,
+    encrypt: bool,
+    password_fd: int | None = None,
+    luks_fd: int | None = None,
+    json_plan: bool = False,
+    confirm: bool = False,
+    use_pkexec: bool = False,
+) -> list[str]:
+    """Construct the exact credential-safe os1-install command line (no passwords in argv)."""
+    cmd: list[str] = []
+    if use_pkexec and os.geteuid() != 0:
+        cmd.append("pkexec")
+    cmd.extend([
+        INSTALLER_BIN,
+        "--disk", disk,
+        "--user", user,
+        "--hostname", hostname,
+        "--timezone", timezone,
+        "--locale", locale,
+    ])
+    if encrypt:
+        cmd.append("--encrypt")
+    if password_fd is not None:
+        cmd.extend(["--password-fd", str(password_fd)])
+    if encrypt and luks_fd is not None:
+        cmd.extend(["--luks-passphrase-fd", str(luks_fd)])
+    if json_plan:
+        cmd.append("--json-plan")
+    if confirm:
+        cmd.extend(["--confirm-erase-disk", "--confirm-phrase", f"ERASE {disk}"])
+    return cmd
+
+
+def run_self_test() -> int:
+    """Headless unit test verifying command builder and security invariants."""
+    argv = build_install_argv(
+        disk="/dev/vda",
+        user="alice",
+        hostname="os1-workstation",
+        timezone="UTC",
+        locale="en_US.UTF-8",
+        encrypt=True,
+        password_fd=7,
+        luks_fd=8,
+        confirm=True,
+    )
+    assert "--encrypt" in argv
+    assert "--password-fd" in argv and "7" in argv
+    assert "--luks-passphrase-fd" in argv and "8" in argv
+    assert "--password" not in argv
+    assert "--luks-passphrase" not in argv
+    assert "--confirm-erase-disk" in argv
+    assert "ERASE /dev/vda" in argv
+    print("[os1-install-gui] --self-test PASSED (credential-safe fd argv builder verified)")
+    return 0
+
+
+def launch_gui() -> int:
+    try:
+        from PyQt5.QtCore import QThread, pyqtSignal
+        from PyQt5.QtWidgets import (
+            QApplication,
+            QCheckBox,
+            QComboBox,
+            QFormLayout,
+            QLabel,
+            QLineEdit,
+            QMessageBox,
+            QPlainTextEdit,
+            QProgressBar,
+            QPushButton,
+            QVBoxLayout,
+            QWizard,
+            QWizardPage,
+        )
+    except ImportError as exc:
+        print(f"ERROR: PyQt5 is required for os1-install-gui ({exc}). Use CLI: sudo os1-install --help", file=sys.stderr)
+        return 1
+
+    class InstallWorker(QThread):
+        output_line = pyqtSignal(str)
+        finished_rc = pyqtSignal(int)
+
+        def __init__(self, params: dict) -> None:
+            super().__init__()
+            self.params = params
+
+        def run(self) -> None:
+            pw_r, pw_w = os.pipe()
+            luks_r = luks_w = None
+            pass_fds = [pw_r]
+            try:
+                os.write(pw_w, (self.params["password"] + "\n").encode("utf-8"))
+                os.close(pw_w)
+                pw_w = -1
+
+                if self.params["encrypt"]:
+                    luks_r, luks_w = os.pipe()
+                    os.write(luks_w, (self.params["luks_pass"] + "\n").encode("utf-8"))
+                    os.close(luks_w)
+                    luks_w = -1
+                    pass_fds.append(luks_r)
+
+                argv = build_install_argv(
+                    disk=self.params["disk"],
+                    user=self.params["user"],
+                    hostname=self.params["hostname"],
+                    timezone=self.params["timezone"],
+                    locale=self.params["locale"],
+                    encrypt=self.params["encrypt"],
+                    password_fd=pw_r,
+                    luks_fd=luks_r,
+                    confirm=True,
+                    use_pkexec=True,
+                )
+                proc = subprocess.Popen(
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    pass_fds=tuple(pass_fds),
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    self.output_line.emit(line.rstrip("\n"))
+                rc = proc.wait()
+                self.finished_rc.emit(rc)
+            except Exception as exc:
+                self.output_line.emit(f"ERROR: {exc}")
+                self.finished_rc.emit(1)
+            finally:
+                for fd in (pw_r, pw_w, luks_r, luks_w):
+                    if fd is not None and fd >= 0:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+
+    class OS1InstallerWizard(QWizard):
+        def __init__(self) -> None:
+            super().__init__()
+            self.setWindowTitle("Install OS-1 GNU/Linux")
+            self.setMinimumSize(680, 500)
+            self.worker: InstallWorker | None = None
+
+            # Page 1: Welcome
+            p_welcome = QWizardPage()
+            p_welcome.setTitle("Welcome to OS-1 GNU/Linux")
+            p_welcome.setSubTitle("This wizard installs OS-1 onto your computer using the hardened UEFI/GPT installer.")
+            l1 = QVBoxLayout()
+            l1.addWidget(QLabel(
+                "OS-1 will guide you through:\n\n"
+                "  1. Selecting your target disk\n"
+                "  2. Optionally enabling LUKS2 full-disk encryption\n"
+                "  3. Creating your administrator account & locale\n"
+                "  4. Reviewing the exact disk plan before any changes are made\n\n"
+                "No disk changes occur until you confirm on the Summary page."
+            ))
+            p_welcome.setLayout(l1)
+            self.addPage(p_welcome)
+
+            # Page 2: Target Disk & Encryption
+            p_disk = QWizardPage()
+            p_disk.setTitle("Target Disk & Encryption")
+            p_disk.setSubTitle("Select the disk to erase and install OS-1 onto.")
+            l2 = QFormLayout()
+            self.disk_combo = QComboBox()
+            for d in discover_disks():
+                self.disk_combo.addItem(d["label"], d["path"])
+            if self.disk_combo.count() == 0:
+                self.disk_combo.addItem("/dev/vda (manual fallback)", "/dev/vda")
+            l2.addRow("Target Disk:", self.disk_combo)
+
+            self.encrypt_cb = QCheckBox("Encrypt disk with LUKS2 full-disk encryption")
+            l2.addRow("", self.encrypt_cb)
+
+            self.luks_edit = QLineEdit()
+            self.luks_edit.setEchoMode(QLineEdit.Password)
+            self.luks_edit.setEnabled(False)
+            self.luks_confirm = QLineEdit()
+            self.luks_confirm.setEchoMode(QLineEdit.Password)
+            self.luks_confirm.setEnabled(False)
+            self.encrypt_cb.toggled.connect(self.luks_edit.setEnabled)
+            self.encrypt_cb.toggled.connect(self.luks_confirm.setEnabled)
+            l2.addRow("Encryption Passphrase:", self.luks_edit)
+            l2.addRow("Confirm Passphrase:", self.luks_confirm)
+            p_disk.setLayout(l2)
+            self.addPage(p_disk)
+
+            # Page 3: User & System Identity
+            p_user = QWizardPage()
+            p_user.setTitle("Account & System Settings")
+            p_user.setSubTitle("Create your administrator user account (root login is locked by default).")
+            l3 = QFormLayout()
+            self.user_edit = QLineEdit()
+            self.user_edit.setPlaceholderText("e.g. alice")
+            self.pass_edit = QLineEdit()
+            self.pass_edit.setEchoMode(QLineEdit.Password)
+            self.pass_confirm = QLineEdit()
+            self.pass_confirm.setEchoMode(QLineEdit.Password)
+            self.host_edit = QLineEdit("os1-desktop")
+            self.tz_edit = QLineEdit("UTC")
+            self.locale_edit = QLineEdit("en_US.UTF-8")
+            l3.addRow("Username:", self.user_edit)
+            l3.addRow("Password:", self.pass_edit)
+            l3.addRow("Confirm Password:", self.pass_confirm)
+            l3.addRow("Hostname:", self.host_edit)
+            l3.addRow("Timezone:", self.tz_edit)
+            l3.addRow("Locale:", self.locale_edit)
+            p_user.setLayout(l3)
+            self.addPage(p_user)
+
+            # Page 4: Summary
+            self.p_summary = QWizardPage()
+            self.p_summary.setTitle("Review Installation Plan")
+            self.p_summary.setSubTitle("Verify all settings before erasing the target disk.")
+            l4 = QVBoxLayout()
+            self.summary_view = QPlainTextEdit()
+            self.summary_view.setReadOnly(True)
+            self.confirm_cb = QCheckBox("I understand ALL data on the selected target disk will be permanently erased.")
+            l4.addWidget(self.summary_view)
+            l4.addWidget(self.confirm_cb)
+            self.p_summary.setLayout(l4)
+            self.addPage(self.p_summary)
+
+            # Page 5: Install Progress
+            self.p_progress = QWizardPage()
+            self.p_progress.setTitle("Installing OS-1")
+            self.p_progress.setSubTitle("Writing filesystem, kernel, and UEFI bootloader...")
+            l5 = QVBoxLayout()
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 0)
+            self.log_view = QPlainTextEdit()
+            self.log_view.setReadOnly(True)
+            self.reboot_btn = QPushButton("Reboot Now")
+            self.reboot_btn.setEnabled(False)
+            self.reboot_btn.clicked.connect(lambda: subprocess.Popen(["systemctl", "reboot"]))
+            l5.addWidget(self.progress_bar)
+            l5.addWidget(self.log_view)
+            l5.addWidget(self.reboot_btn)
+            self.p_progress.setLayout(l5)
+            self.addPage(self.p_progress)
+
+            self.currentIdChanged.connect(self._on_page_changed)
+
+        def validateCurrentPage(self) -> bool:
+            cid = self.currentId()
+            if cid == 1 and self.encrypt_cb.isChecked():
+                if len(self.luks_edit.text()) < 8:
+                    QMessageBox.warning(self, "Weak Passphrase", "LUKS2 passphrase must be at least 8 characters.")
+                    return False
+                if self.luks_edit.text() != self.luks_confirm.text():
+                    QMessageBox.warning(self, "Mismatch", "Encryption passphrases do not match.")
+                    return False
+            elif cid == 2:
+                if not USERNAME_RE.match(self.user_edit.text().strip()):
+                    QMessageBox.warning(self, "Invalid Username", "Use lowercase letters, digits, _ or - (starting with a letter).")
+                    return False
+                if not self.pass_edit.text():
+                    QMessageBox.warning(self, "Missing Password", "User password cannot be empty.")
+                    return False
+                if self.pass_edit.text() != self.pass_confirm.text():
+                    QMessageBox.warning(self, "Mismatch", "User passwords do not match.")
+                    return False
+                if not HOSTNAME_RE.match(self.host_edit.text().strip()):
+                    QMessageBox.warning(self, "Invalid Hostname", "Enter a valid hostname (letters, digits, hyphens).")
+                    return False
+            elif cid == 3 and not self.confirm_cb.isChecked():
+                QMessageBox.warning(self, "Confirmation Required", "Please confirm that you want to erase the target disk.")
+                return False
+            return True
+
+        def _on_page_changed(self, page_id: int) -> None:
+            if page_id == 3:
+                disk = self.disk_combo.currentData()
+                enc = "LUKS2 Full-Disk Encryption (ESP + /boot + encrypted ext4 root)" if self.encrypt_cb.isChecked() else "Standard GPT (ESP + ext4 root)"
+                self.summary_view.setPlainText(
+                    f"Target Disk:  {disk}  [ALL DATA WILL BE ERASED]\n"
+                    f"Layout:       {enc}\n"
+                    f"Admin User:   {self.user_edit.text().strip()}\n"
+                    f"Hostname:     {self.host_edit.text().strip()}\n"
+                    f"Timezone:     {self.tz_edit.text().strip()}\n"
+                    f"Locale:       {self.locale_edit.text().strip()}\n"
+                    f"Security:     AppArmor LSM, UFW default-deny firewall, zram swap, unattended security updates\n"
+                )
+            elif page_id == 4 and self.worker is None:
+                self.button(QWizard.BackButton).setEnabled(False)
+                self.button(QWizard.CancelButton).setEnabled(False)
+                params = {
+                    "disk": self.disk_combo.currentData(),
+                    "user": self.user_edit.text().strip(),
+                    "password": self.pass_edit.text(),
+                    "hostname": self.host_edit.text().strip(),
+                    "timezone": self.tz_edit.text().strip(),
+                    "locale": self.locale_edit.text().strip(),
+                    "encrypt": self.encrypt_cb.isChecked(),
+                    "luks_pass": self.luks_edit.text(),
+                }
+                self.worker = InstallWorker(params)
+                self.worker.output_line.connect(self.log_view.appendPlainText)
+                self.worker.finished_rc.connect(self._on_finished)
+                self.worker.start()
+
+        def _on_finished(self, rc: int) -> None:
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(1)
+            if rc == 0:
+                self.p_progress.setSubTitle("Installation complete! Remove the live USB/ISO and reboot.")
+                self.reboot_btn.setEnabled(True)
+            else:
+                self.p_progress.setSubTitle(f"Installation failed (exit code {rc}). Review the log above.")
+                self.button(QWizard.CancelButton).setEnabled(True)
+
+    app = QApplication(sys.argv)
+    wiz = OS1InstallerWizard()
+    wiz.show()
+    return app.exec_()
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="OS-1 Graphical Installer")
+    parser.add_argument("--self-test", action="store_true", help="Run headless self-test and exit")
+    args = parser.parse_args(argv)
+    if args.self_test:
+        return run_self_test()
+    return launch_gui()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

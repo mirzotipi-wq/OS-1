@@ -15,8 +15,8 @@ case "${cmd}" in
         echo "=== OS-1 Repository & Toolchain Audit ==="
         echo "Branch: $(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)"
         echo "HEAD:   $(git -C "${REPO_ROOT}" rev-parse HEAD)"
-        echo "Kernel Makefile:"
-        grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION|NAME) =' "${REPO_ROOT}/Makefile"
+        echo "Pinned LTS Kernel Manifest:"
+        cat "${REPO_ROOT}/distro/kernel/KERNEL_LTS.env"
         echo "Shell script syntax check (bash -n):"
         for f in \
             "${REPO_ROOT}/distro/kernel/build-kernel.sh" \
@@ -24,13 +24,18 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/build-live-initramfs.sh" \
             "${REPO_ROOT}/distro/build/build-rootfs.sh" \
             "${REPO_ROOT}/distro/build/build-iso.sh" \
+            "${REPO_ROOT}/distro/installer/os1-build-luks-initramfs" \
             "${REPO_ROOT}/distro/packages/build-debs.sh" \
             "${REPO_ROOT}/distro/packages/build-kernel-deb.sh" \
             "${REPO_ROOT}/distro/shell/bin/os1-appearance" \
             "${REPO_ROOT}/distro/shell/bin/os1-shell-init" \
             "${REPO_ROOT}/distro/shell/bin/os1-accessibility" \
             "${REPO_ROOT}/distro/tests/qemu-serial-boot.sh" \
-            "${REPO_ROOT}/distro/tools/os1.sh"; do
+            "${REPO_ROOT}/distro/tools/os1.sh" \
+            "${REPO_ROOT}/distro/tools/os1-zram-setup" \
+            "${REPO_ROOT}/distro/tools/os1-mok-sign" \
+            "${REPO_ROOT}/distro/tools/os1-sign-release.sh" \
+            "${REPO_ROOT}/distro/tools/os1-cutover-ga.sh"; do
             bash -n "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
@@ -40,9 +45,11 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/build/pack-initramfs.py" \
             "${REPO_ROOT}/distro/build/generate-sbom.py" \
             "${REPO_ROOT}/distro/installer/os1-install" \
+            "${REPO_ROOT}/distro/installer/os1-install-gui" \
             "${REPO_ROOT}/distro/installer/os1-firstboot" \
             "${REPO_ROOT}/distro/tools/os1-hw-diag" \
             "${REPO_ROOT}/distro/tools/os1-update-boot" \
+            "${REPO_ROOT}/distro/tests/os1_test_util.py" \
             "${REPO_ROOT}/distro/tests/ci-integrity-test.py" \
             "${REPO_ROOT}/distro/tests/kernel-driver-audit.py" \
             "${REPO_ROOT}/distro/tests/installer-safety-test.py" \
@@ -55,12 +62,15 @@ case "${cmd}" in
             "${REPO_ROOT}/distro/tests/qemu-firewall-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-iso-uefi-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-install-test.py" \
+            "${REPO_ROOT}/distro/tests/qemu-luks-install-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-update-rollback-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-installed-desktop-test.py" \
             "${REPO_ROOT}/distro/tests/qemu-wayland-test.py"; do
             python3 -m py_compile "${f}"
             echo "  [OK] ${f#${REPO_ROOT}/}"
         done
+        echo "GA cutover preflight check (dry-run):"
+        bash "${REPO_ROOT}/distro/tools/os1-cutover-ga.sh" --dry-run
         echo "CI workflow integrity check:"
         python3 "${REPO_ROOT}/distro/tests/ci-integrity-test.py"
         echo "Installer preflight & credential safety check:"
@@ -102,6 +112,9 @@ case "${cmd}" in
         ;;
     install-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-install-test.py" "$@"
+        ;;
+    luks-install-test)
+        exec python3 "${REPO_ROOT}/distro/tests/qemu-luks-install-test.py" "$@"
         ;;
     update-rollback-test)
         exec python3 "${REPO_ROOT}/distro/tests/qemu-update-rollback-test.py" "$@"

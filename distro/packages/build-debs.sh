@@ -36,8 +36,27 @@ trap cleanup_gpg EXIT
 GPG_SIGN_KEY="${OS1_GPG_SIGN_KEY:-}"
 GPG_HOMEDIR="${OS1_GPG_HOMEDIR:-}"
 GPG_PUBKEY="${OS1_GPG_PUBKEY:-}"
+GPG_PASSPHRASE="${OS1_GPG_PASSPHRASE:-}"
 
-if [[ "${OS1_EPHEMERAL_GPG:-0}" == "1" && -z "${GPG_SIGN_KEY}" ]]; then
+if [[ -n "${OS1_GPG_PRIVATE_KEY:-}" && -z "${GPG_SIGN_KEY}" ]]; then
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo "ERROR: OS1_GPG_PRIVATE_KEY requires gpg in PATH" >&2
+        exit 1
+    fi
+    EPHEMERAL_GNUPG="$(mktemp -d "${TMPDIR:-/tmp}/os1-release-gpg.XXXXXX")"
+    chmod 0700 "${EPHEMERAL_GNUPG}"
+    GPG_HOMEDIR="${EPHEMERAL_GNUPG}"
+    printf '%s\n' "${OS1_GPG_PRIVATE_KEY}" | GNUPGHOME="${GPG_HOMEDIR}" gpg --batch --quiet --import
+    GPG_SIGN_KEY="$(GNUPGHOME="${GPG_HOMEDIR}" gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+    if [[ -z "${GPG_SIGN_KEY}" ]]; then
+        echo "ERROR: Failed to extract secret key fingerprint from OS1_GPG_PRIVATE_KEY" >&2
+        exit 1
+    fi
+    GPG_PUBKEY="${REPO_DIR}/os1-archive-keyring.gpg"
+    GNUPGHOME="${GPG_HOMEDIR}" gpg --batch --yes --export "${GPG_SIGN_KEY}" > "${GPG_PUBKEY}"
+    chmod 0644 "${GPG_PUBKEY}"
+    echo "[os1-debs] Imported production GPG signing key (fpr=${GPG_SIGN_KEY:0:16}...)"
+elif [[ "${OS1_EPHEMERAL_GPG:-0}" == "1" && -z "${GPG_SIGN_KEY}" ]]; then
     if ! command -v gpg >/dev/null 2>&1; then
         echo "ERROR: OS1_EPHEMERAL_GPG=1 requires gpg in PATH" >&2
         exit 1
@@ -135,9 +154,12 @@ finalize_deb() {
 # ---------------------------------------------------------------------------
 echo "[os1-debs] Building os1-release_${VERSION}_all.deb..."
 REL_ROOT="${PKG_WORK}/os1-release"
-mkdir -p "${REL_ROOT}/DEBIAN" "${REL_ROOT}/etc" "${REL_ROOT}/usr/share/os1"
+mkdir -p "${REL_ROOT}/DEBIAN" "${REL_ROOT}/etc/sysctl.d" "${REL_ROOT}/etc/apt/apt.conf.d" "${REL_ROOT}/usr/share/os1"
 
 install -m 0644 "${REPO_ROOT}/distro/VERSION" "${REL_ROOT}/usr/share/os1/VERSION"
+install -m 0644 "${REPO_ROOT}/distro/security/90-os1-hardening.conf" "${REL_ROOT}/etc/sysctl.d/90-os1-hardening.conf"
+install -m 0644 "${REPO_ROOT}/distro/security/20auto-upgrades" "${REL_ROOT}/etc/apt/apt.conf.d/20auto-upgrades"
+install -m 0644 "${REPO_ROOT}/distro/security/50unattended-upgrades-os1" "${REL_ROOT}/etc/apt/apt.conf.d/50unattended-upgrades-os1"
 cat > "${REL_ROOT}/etc/os-release" <<EOF
 PRETTY_NAME="${OS1_NAME} ${OS1_VERSION} (Debian ${OS1_DEBIAN_SUITE} base)"
 NAME="${OS1_NAME}"
@@ -176,9 +198,10 @@ Section: misc
 Priority: optional
 Architecture: all
 Maintainer: ${MAINTAINER}
-Description: OS-1 distribution release identity and version metadata
+Description: OS-1 distribution release identity, hardening defaults, and version metadata
  Provides canonical OS-1 release identification (/etc/os-release via
- dpkg-divert) and /usr/share/os1/VERSION metadata.
+ dpkg-divert), /usr/share/os1/VERSION metadata, balanced sysctl hardening,
+ and unattended security update policies.
 EOF
 write_copyright "${REL_ROOT}" "os1-release"
 finalize_deb "${REL_ROOT}" "${REPO_DIR}/os1-release_${VERSION}_all.deb"
@@ -204,9 +227,8 @@ EOF
 else
     cat > "${KEY_ROOT}/etc/apt/sources.list.d/os1.list" <<EOF
 # OS-1 APT repository configuration
-# Configure a signed OS-1 archive URL with signed-by=/usr/share/keyrings/os1-archive-keyring.gpg
-# Example:
-# deb [signed-by=/usr/share/keyrings/os1-archive-keyring.gpg] https://packages.os1.example/apt ./
+# Hosted GitHub Pages signed archive (enabled automatically in tagged releases via OS1_APT_REPO_URL):
+# deb [signed-by=/usr/share/keyrings/os1-archive-keyring.gpg] ${OS1_APT_PAGES_URL} ./
 EOF
 fi
 chmod 0644 "${KEY_ROOT}/etc/apt/sources.list.d/os1.list"
@@ -362,8 +384,12 @@ finalize_deb "${FB_ROOT}" "${REPO_DIR}/os1-firstboot_${VERSION}_all.deb"
 # ---------------------------------------------------------------------------
 echo "[os1-debs] Building os1-installer_${VERSION}_all.deb..."
 INST_ROOT="${PKG_WORK}/os1-installer"
-mkdir -p "${INST_ROOT}/DEBIAN" "${INST_ROOT}/usr/sbin" "${INST_ROOT}/usr/share/os1/calamares"
+mkdir -p "${INST_ROOT}/DEBIAN" "${INST_ROOT}/usr/bin" "${INST_ROOT}/usr/sbin" \
+    "${INST_ROOT}/usr/share/applications" "${INST_ROOT}/usr/share/os1/calamares"
 install -m 0755 "${REPO_ROOT}/distro/installer/os1-install" "${INST_ROOT}/usr/sbin/os1-install"
+install -m 0755 "${REPO_ROOT}/distro/installer/os1-build-luks-initramfs" "${INST_ROOT}/usr/sbin/os1-build-luks-initramfs"
+install -m 0755 "${REPO_ROOT}/distro/installer/os1-install-gui" "${INST_ROOT}/usr/bin/os1-install-gui"
+install -m 0644 "${REPO_ROOT}/distro/installer/os1-installer.desktop" "${INST_ROOT}/usr/share/applications/os1-installer.desktop"
 install -m 0644 "${REPO_ROOT}/distro/installer/calamares/settings.conf" \
     "${INST_ROOT}/usr/share/os1/calamares/settings.conf"
 
@@ -373,12 +399,12 @@ Version: ${VERSION}
 Section: admin
 Priority: optional
 Architecture: all
-Depends: python3, parted, e2fsprogs, dosfstools, grub-efi-amd64-bin, grub-common
+Depends: python3, parted, e2fsprogs, dosfstools, grub-efi-amd64-bin, grub-common, cryptsetup, busybox-static, cpio
 Maintainer: ${MAINTAINER}
 Description: OS-1 preflight-complete, credential-safe UEFI GPT installer
  Installs OS-1 from the UEFI live environment onto a target GPT disk with
- full preflight validation, stdin/fd credential handling, and clean installed
- system identity.
+ full preflight validation, stdin/fd credential handling, opt-in LUKS2
+ full-disk encryption, a PyQt5 graphical wizard, and clean installed identity.
 EOF
 write_copyright "${INST_ROOT}" "os1-installer"
 finalize_deb "${INST_ROOT}" "${REPO_DIR}/os1-installer_${VERSION}_all.deb"
@@ -388,10 +414,14 @@ finalize_deb "${INST_ROOT}" "${REPO_DIR}/os1-installer_${VERSION}_all.deb"
 # ---------------------------------------------------------------------------
 echo "[os1-debs] Building os1-tools_${VERSION}_all.deb..."
 TOOLS_ROOT="${PKG_WORK}/os1-tools"
-mkdir -p "${TOOLS_ROOT}/DEBIAN" "${TOOLS_ROOT}/usr/bin" "${TOOLS_ROOT}/usr/sbin"
+mkdir -p "${TOOLS_ROOT}/DEBIAN" "${TOOLS_ROOT}/usr/bin" "${TOOLS_ROOT}/usr/sbin" \
+    "${TOOLS_ROOT}/usr/lib/systemd/system"
 install -m 0755 "${REPO_ROOT}/distro/tests/fs-operations-test.py" "${TOOLS_ROOT}/usr/bin/os1-fs-test"
 install -m 0755 "${REPO_ROOT}/distro/tools/os1-hw-diag" "${TOOLS_ROOT}/usr/bin/os1-hw-diag"
 install -m 0755 "${REPO_ROOT}/distro/tools/os1-update-boot" "${TOOLS_ROOT}/usr/sbin/os1-update-boot"
+install -m 0755 "${REPO_ROOT}/distro/tools/os1-zram-setup" "${TOOLS_ROOT}/usr/sbin/os1-zram-setup"
+install -m 0644 "${REPO_ROOT}/distro/tools/os1-zram.service" "${TOOLS_ROOT}/usr/lib/systemd/system/os1-zram.service"
+install -m 0755 "${REPO_ROOT}/distro/tools/os1-mok-sign" "${TOOLS_ROOT}/usr/sbin/os1-mok-sign"
 
 cat > "${TOOLS_ROOT}/DEBIAN/control" <<EOF
 Package: os1-tools
@@ -401,9 +431,10 @@ Priority: optional
 Architecture: all
 Depends: python3
 Maintainer: ${MAINTAINER}
-Description: OS-1 system verification, boot management, and diagnostic utilities
+Description: OS-1 system verification, boot management, zram, MOK, and diagnostic utilities
  Provides native OS-1 utilities including os1-fs-test, os1-hw-diag (redacted
- hardware diagnostics), and the atomic GRUB boot menu manager os1-update-boot.
+ hardware diagnostics), os1-update-boot (atomic GRUB menu manager),
+ os1-zram-setup (compressed RAM swap), and os1-mok-sign (MOK Secure Boot helper).
 EOF
 write_copyright "${TOOLS_ROOT}" "os1-tools"
 finalize_deb "${TOOLS_ROOT}" "${REPO_DIR}/os1-tools_${VERSION}_all.deb"
@@ -421,12 +452,13 @@ Version: ${VERSION}
 Section: metapackages
 Priority: optional
 Architecture: amd64
-Depends: os1-release (>= ${VERSION}), os1-keyring (>= ${VERSION}), os1-branding (>= ${VERSION}), os1-shell (>= ${VERSION}), os1-firstboot (>= ${VERSION}), os1-installer (>= ${VERSION}), os1-tools (>= ${VERSION}), plasma-workspace-wayland, kwin-wayland, sddm, dolphin, konsole, firefox-esr, kate, gwenview, okular, kcalc, ark, kde-spectacle, plasma-systemmonitor, systemsettings, pipewire, network-manager, ufw, nftables, orca, upower
+Depends: os1-release (>= ${VERSION}), os1-keyring (>= ${VERSION}), os1-branding (>= ${VERSION}), os1-shell (>= ${VERSION}), os1-firstboot (>= ${VERSION}), os1-installer (>= ${VERSION}), os1-tools (>= ${VERSION}), plasma-workspace-wayland, kwin-wayland, sddm, dolphin, konsole, firefox-esr, kate, gwenview, okular, kcalc, ark, kde-spectacle, plasma-systemmonitor, systemsettings, pipewire, network-manager, ufw, nftables, apparmor, unattended-upgrades, flatpak, plasma-discover, plasma-discover-backend-flatpak, python3-pyqt5, cryptsetup, sbsigntool, mokutil, orca, upower
 Maintainer: ${MAINTAINER}
 Description: OS-1 complete Wayland desktop environment metapackage
  Installs the complete OS-1 graphical desktop experience, native OS-1
- packages, essential applications, PipeWire audio, NetworkManager, UFW/nftables
- firewall, and Orca screen reader baseline.
+ packages, essential applications, Flatpak/Discover app store, PipeWire audio,
+ NetworkManager, UFW/nftables firewall, AppArmor, unattended security updates,
+ and Orca screen reader baseline.
 EOF
 write_copyright "${META_ROOT}" "os1-desktop-meta"
 finalize_deb "${META_ROOT}" "${REPO_DIR}/os1-desktop-meta_${VERSION}_amd64.deb"
@@ -505,12 +537,21 @@ PYEOF
 if [[ -n "${GPG_SIGN_KEY}" ]]; then
     echo "[os1-debs] Signing APT Release metadata (InRelease & Release.gpg)..."
     GPG_ENV_DIR="${GPG_HOMEDIR:-${HOME}/.gnupg}"
-    GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
-        --local-user "${GPG_SIGN_KEY}" \
-        --clearsign -o "${REPO_DIR}/InRelease" "${REPO_DIR}/Release"
-    GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
-        --local-user "${GPG_SIGN_KEY}" \
-        --armor --detach-sign -o "${REPO_DIR}/Release.gpg" "${REPO_DIR}/Release"
+    if [[ -n "${GPG_PASSPHRASE}" ]]; then
+        printf '%s' "${GPG_PASSPHRASE}" | GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --digest-algo SHA256 --local-user "${GPG_SIGN_KEY}" \
+            --clearsign -o "${REPO_DIR}/InRelease" "${REPO_DIR}/Release"
+        printf '%s' "${GPG_PASSPHRASE}" | GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --digest-algo SHA256 --local-user "${GPG_SIGN_KEY}" \
+            --armor --detach-sign -o "${REPO_DIR}/Release.gpg" "${REPO_DIR}/Release"
+    else
+        GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
+            --local-user "${GPG_SIGN_KEY}" \
+            --clearsign -o "${REPO_DIR}/InRelease" "${REPO_DIR}/Release"
+        GNUPGHOME="${GPG_ENV_DIR}" gpg --batch --yes --digest-algo SHA256 \
+            --local-user "${GPG_SIGN_KEY}" \
+            --armor --detach-sign -o "${REPO_DIR}/Release.gpg" "${REPO_DIR}/Release"
+    fi
     (cd "${REPO_DIR}" && sha256sum *.deb Packages Packages.gz Release InRelease Release.gpg os1-archive-keyring.gpg > SHA256SUMS)
 else
     (cd "${REPO_DIR}" && sha256sum *.deb Packages Packages.gz Release > SHA256SUMS)

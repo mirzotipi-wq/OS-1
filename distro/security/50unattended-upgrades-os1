@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// OS-1 unattended-upgrades policy: Debian security + OS-1 signed updates, never force-reboot
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+    "origin=OS-1,label=OS-1 APT Repository";
+};
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";

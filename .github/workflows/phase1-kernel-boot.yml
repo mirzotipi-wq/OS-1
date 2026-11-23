@@ -48,6 +48,7 @@ jobs:
             cpio \
             kmod \
             xz-utils \
+            curl \
             busybox-static \
             qemu-system-x86 \
             file
@@ -58,9 +59,9 @@ jobs:
       - name: Compute exact kernel source & toolchain cache key
         id: kkey
         run: |
-          TREE_HASH="$(git rev-parse HEAD:Makefile HEAD:arch/x86 HEAD:drivers HEAD:kernel HEAD:mm HEAD:net HEAD:fs HEAD:include HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
+          TREE_HASH="$(git rev-parse HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
           GCC_HASH="$(gcc --version | head -n 1 | sha256sum | awk '{print $1}')"
-          echo "key=os1-kernel-x86_64-v3-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
+          echo "key=os1-kernel-lts-x86_64-v4-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached OS-1 x86_64 kernel
         id: kernel-cache

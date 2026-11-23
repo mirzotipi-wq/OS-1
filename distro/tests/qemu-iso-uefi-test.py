@@ -180,6 +180,9 @@ def main() -> int:
     live_log = os.path.join(log_dir, "qemu-phase3-uefi-live.log")
     recovery_log = os.path.join(log_dir, "qemu-phase3-uefi-recovery.log")
 
+    from os1_test_util import expected_kernel_release
+    expected_krel = expected_kernel_release(repo_root, out_root)
+
     # --- TEST 1: Fresh UEFI Live ISO Boot ---
     print("=== Phase 3 Test 1: UEFI Live ISO Boot ===", flush=True)
     vm1 = UefiIsoSession(iso_path, ovmf_path, live_log)
@@ -196,15 +199,15 @@ def main() -> int:
             "LIVECHECK",
             timeout=30.0,
         )
-        if "7.4.0-rc3-os1" not in out:
-            raise RuntimeError(f"Expected OS-1 kernel release, got:\n{out}")
+        if expected_krel not in out:
+            raise RuntimeError(f"Expected OS-1 kernel release ({expected_krel}), got:\n{out}")
         if "UEFI_OK" not in out:
             raise RuntimeError(f"Expected /sys/firmware/efi (UEFI boot), got:\n{out}")
         if "overlay" not in out:
             raise RuntimeError(f"Expected OverlayFS live root, got:\n{out}")
         if "ID=os1" not in out:
             raise RuntimeError(f"Expected ID=os1, got:\n{out}")
-        print("[PASS] Verified OS-1 kernel, UEFI firmware (/sys/firmware/efi), OverlayFS root, and ID=os1", flush=True)
+        print(f"[PASS] Verified OS-1 kernel ({expected_krel}), UEFI firmware (/sys/firmware/efi), OverlayFS root, and ID=os1", flush=True)
 
         vm1.run_cmd(
             "for i in $(seq 1 30); do ip -4 addr show dev eth0 | grep -q 'inet ' && break; sleep 2; done; ip -4 addr show dev eth0 | grep 'inet '",
@@ -233,8 +236,8 @@ def main() -> int:
         print("[PASS] Entered OS-1 Recovery Mode root rescue shell", flush=True)
 
         out = vm2.run_cmd("uname -r && fsck.ext4 -V 2>&1 | head -n 1", "RECOVCHECK", timeout=30.0)
-        if "7.4.0-rc3-os1" not in out:
-            raise RuntimeError(f"Recovery mode kernel mismatch:\n{out}")
+        if expected_krel not in out:
+            raise RuntimeError(f"Recovery mode kernel mismatch (expected {expected_krel}):\n{out}")
         print("[PASS] Recovery mode verified OS-1 kernel and fsck.ext4 recovery tool", flush=True)
 
         vm2.sendline("poweroff -f")

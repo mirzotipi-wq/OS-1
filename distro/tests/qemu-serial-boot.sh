@@ -101,10 +101,18 @@ assert_absent() {
     fi
 }
 
-assert_contains "Linux version 7.4.0-rc3-os1" "Kernel banner identifies OS-1 7.4.0-rc3-os1"
+# shellcheck source=../kernel/KERNEL_LTS.env
+source "${REPO_ROOT}/distro/kernel/KERNEL_LTS.env"
+EXPECTED_KREL="${OS1_KERNEL_VERSION}-os1"
+if [[ -f "${OUT_ROOT}/kernel/provenance.json" ]]; then
+    EXPECTED_KREL="$(python3 -c "import json; print(json.load(open('${OUT_ROOT}/kernel/provenance.json'))['kernel_release'])")"
+fi
+
+assert_contains "Linux version ${EXPECTED_KREL}" "Kernel banner identifies OS-1 ${EXPECTED_KREL}"
 assert_contains "=== OS-1_INIT_START ===" "Kernel transitioned to PID 1 userspace init"
 assert_contains "OS-1_UNAME: Linux" "Userspace uname reports Linux"
-assert_contains "7.4.0-rc3-os1" "Userspace uname confirms OS-1 kernel release"
+assert_contains "${EXPECTED_KREL}" "Userspace uname confirms OS-1 kernel release"
+assert_absent "-rc" "Production LTS kernel has no -rc release-candidate suffix"
 assert_contains "OS-1_TMP_WRITE_OK" "Userspace writable /tmp smoke test passed"
 assert_contains "=== OS-1_BOOT_PROOF_PASS ===" "Userspace completed boot proof and requested poweroff"
 assert_absent "Kernel panic" "No kernel panic in serial log"

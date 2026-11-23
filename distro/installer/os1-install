@@ -236,11 +236,15 @@ def read_os_release_pretty(rootfs_dir: Path) -> str:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    # Explicitly reject plaintext --password in argv (Section 4.4 / 8.3)
+    # Explicitly reject plaintext --password or --luks-passphrase in argv
     for arg in argv:
         if arg == "--password" or arg.startswith("--password="):
             eprint("ERROR: --password on the command line is forbidden for credential safety.")
             eprint("Use --password-stdin or --password-fd <N> instead.")
+            sys.exit(2)
+        if arg == "--luks-passphrase" or arg.startswith("--luks-passphrase="):
+            eprint("ERROR: --luks-passphrase on the command line is forbidden for credential safety.")
+            eprint("Use --luks-passphrase-stdin or --luks-passphrase-fd <N> instead.")
             sys.exit(2)
 
     parser = argparse.ArgumentParser(
@@ -252,6 +256,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     pw_group = parser.add_mutually_exclusive_group(required=False)
     pw_group.add_argument("--password-stdin", action="store_true", help="Read user password from stdin")
     pw_group.add_argument("--password-fd", type=int, help="Read user password from file descriptor N")
+    parser.add_argument("--encrypt", action="store_true", help="Enable LUKS2 full-disk encryption on root partition")
+    luks_group = parser.add_mutually_exclusive_group(required=False)
+    luks_group.add_argument("--luks-passphrase-stdin", action="store_true", help="Read LUKS2 passphrase from stdin")
+    luks_group.add_argument("--luks-passphrase-fd", type=int, help="Read LUKS2 passphrase from file descriptor N")
     parser.add_argument("--hostname", default="os1", help="System hostname (default: os1)")
     parser.add_argument("--timezone", default="UTC", help="IANA timezone (default: UTC)")
     parser.add_argument("--locale", default="en_US.UTF-8", help="System locale (default: en_US.UTF-8)")
@@ -270,6 +278,10 @@ def main(argv: list[str]) -> int:
     # === STAGE 1: Argument parsing ===
     args = parse_args(argv)
     plan_only = args.plan or args.dry_run or args.json_plan
+
+    if args.password_stdin and args.luks_passphrase_stdin:
+        eprint("ERROR: Cannot read both --password-stdin and --luks-passphrase-stdin from stdin; use --password-fd or --luks-passphrase-fd.")
+        return 2
 
     if not plan_only and os.geteuid() != 0:
         eprint("ERROR: os1-install must run as root to perform installation.")
@@ -319,6 +331,27 @@ def main(argv: list[str]) -> int:
         eprint("ERROR: Password must be supplied via --password-stdin or --password-fd <N>.")
         return 2
 
+    luks_passphrase: str | None = None
+    if args.encrypt:
+        if args.luks_passphrase_stdin:
+            try:
+                luks_passphrase = read_password_from_fd(sys.stdin.fileno())
+            except ValueError as exc:
+                eprint(f"ERROR: Invalid LUKS passphrase: {exc}")
+                return 2
+        elif args.luks_passphrase_fd is not None:
+            try:
+                luks_passphrase = read_password_from_fd(args.luks_passphrase_fd)
+            except (ValueError, OSError) as exc:
+                eprint(f"ERROR: Failed to read LUKS passphrase from fd {args.luks_passphrase_fd}: {exc}")
+                return 2
+        elif not plan_only:
+            eprint("ERROR: --encrypt requires --luks-passphrase-stdin or --luks-passphrase-fd <N>.")
+            return 2
+        if luks_passphrase is not None and len(luks_passphrase) < 8:
+            eprint("ERROR: LUKS2 encryption passphrase must be at least 8 characters.")
+            return 2
+
     # === STAGE 4: Target-disk validation ===
     try:
         disk_info = get_disk_identity(
@@ -329,10 +362,11 @@ def main(argv: list[str]) -> int:
         eprint(f"ERROR: {exc}")
         return 1
 
-    root_size_mib = disk_info["size_mib"] - EFI_PART_MIB - 1
+    boot_part_mib = 512 if args.encrypt else 0
+    root_size_mib = disk_info["size_mib"] - EFI_PART_MIB - boot_part_mib - 1
     os_pretty = read_os_release_pretty(source_ro)
 
-    # === STAGE 6: Installation plan generation (NEVER includes password) ===
+    # === STAGE 6: Installation plan generation (NEVER includes password or passphrase) ===
     plan = {
         "target_disk": disk_info["disk"],
         "target_realpath": disk_info["realpath"],
@@ -341,9 +375,12 @@ def main(argv: list[str]) -> int:
         "partition_table": "gpt",
         "efi_partition_mib": EFI_PART_MIB,
         "efi_filesystem": "vfat",
+        "boot_partition_mib": boot_part_mib,
+        "boot_filesystem": "ext4" if args.encrypt else None,
         "root_partition_mib": root_size_mib,
         "root_filesystem": "ext4",
-        "encryption_enabled": False,
+        "encryption_enabled": bool(args.encrypt),
+        "encryption_type": "luks2" if args.encrypt else None,
         "hostname": args.hostname,
         "username": args.user,
         "user_groups": ALLOWED_USER_GROUPS.split(","),
@@ -367,8 +404,11 @@ def main(argv: list[str]) -> int:
     print(f"  OS Version:   {plan['os_version']}")
     print(f"  Target Disk:  {plan['target_disk']} ({plan['target_size_mib']} MiB) — ALL EXISTING DATA WILL BE ERASED")
     print(f"  Existing:     {', '.join(plan['existing_partitions']) or 'none'}")
-    print(f"  Layout:       GPT -> p1: {EFI_PART_MIB} MiB FAT32 ESP + p2: ~{root_size_mib} MiB ext4 root")
-    print(f"  Encryption:   {'enabled' if plan['encryption_enabled'] else 'disabled'}")
+    if args.encrypt:
+        print(f"  Layout:       GPT -> p1: {EFI_PART_MIB} MiB FAT32 ESP + p2: {boot_part_mib} MiB ext4 /boot + p3: ~{root_size_mib} MiB LUKS2 ext4 root")
+    else:
+        print(f"  Layout:       GPT -> p1: {EFI_PART_MIB} MiB FAT32 ESP + p2: ~{root_size_mib} MiB ext4 root")
+    print(f"  Encryption:   {'LUKS2 enabled' if plan['encryption_enabled'] else 'disabled'}")
     print(f"  Hostname:     {plan['hostname']}")
     print(f"  Admin User:   {plan['username']} ({ALLOWED_USER_GROUPS})")
     print(f"  Timezone:     {plan['timezone']}")
@@ -409,32 +449,52 @@ def main(argv: list[str]) -> int:
         return 1
 
     assert password is not None
+    if args.encrypt:
+        assert luks_passphrase is not None
 
     disk = disk_info["realpath"]
     if disk[-1].isdigit():
         efi_part = f"{disk}p1"
-        root_part = f"{disk}p2"
+        boot_part = f"{disk}p2" if args.encrypt else None
+        root_part = f"{disk}p3" if args.encrypt else f"{disk}p2"
     else:
         efi_part = f"{disk}1"
-        root_part = f"{disk}2"
+        boot_part = f"{disk}2" if args.encrypt else None
+        root_part = f"{disk}3" if args.encrypt else f"{disk}2"
 
     target = Path("/mnt/os1-target")
+    luks_mapper = "os1_crypt"
+    luks_opened = False
 
     def cleanup_mounts() -> None:
+        nonlocal luks_opened
         subprocess.run(["umount", "-R", str(target)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if luks_opened:
+            subprocess.run(["cryptsetup", "close", luks_mapper], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            luks_opened = False
 
     try:
         # === STAGE 8: Destructive apply stage ===
-        print(f"[os1-install] Partitioning {disk} with GPT (ESP + ext4 root)...", flush=True)
-        run_checked(["parted", "-s", disk, "mklabel", "gpt"])
-        run_checked(["parted", "-s", disk, "mkpart", "ESP", "fat32", "1MiB", f"{EFI_PART_MIB + 1}MiB"])
-        run_checked(["parted", "-s", disk, "set", "1", "esp", "on"])
-        run_checked(["parted", "-s", disk, "mkpart", "OS1_ROOT", "ext4", f"{EFI_PART_MIB + 1}MiB", "100%"])
+        if args.encrypt:
+            print(f"[os1-install] Partitioning {disk} with GPT (ESP + /boot + LUKS2 root)...", flush=True)
+            boot_end_mib = EFI_PART_MIB + 1 + boot_part_mib
+            run_checked(["parted", "-s", disk, "mklabel", "gpt"])
+            run_checked(["parted", "-s", disk, "mkpart", "ESP", "fat32", "1MiB", f"{EFI_PART_MIB + 1}MiB"])
+            run_checked(["parted", "-s", disk, "set", "1", "esp", "on"])
+            run_checked(["parted", "-s", disk, "mkpart", "OS1_BOOT", "ext4", f"{EFI_PART_MIB + 1}MiB", f"{boot_end_mib}MiB"])
+            run_checked(["parted", "-s", disk, "mkpart", "OS1_LUKS", f"{boot_end_mib}MiB", "100%"])
+        else:
+            print(f"[os1-install] Partitioning {disk} with GPT (ESP + ext4 root)...", flush=True)
+            run_checked(["parted", "-s", disk, "mklabel", "gpt"])
+            run_checked(["parted", "-s", disk, "mkpart", "ESP", "fat32", "1MiB", f"{EFI_PART_MIB + 1}MiB"])
+            run_checked(["parted", "-s", disk, "set", "1", "esp", "on"])
+            run_checked(["parted", "-s", disk, "mkpart", "OS1_ROOT", "ext4", f"{EFI_PART_MIB + 1}MiB", "100%"])
 
         import time
+        expected_parts = [p for p in (efi_part, boot_part, root_part) if p is not None]
         subprocess.run(["udevadm", "settle", "--timeout=15"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for attempt in range(20):
-            if os.path.exists(efi_part) and os.path.exists(root_part):
+            if all(os.path.exists(p) for p in expected_parts):
                 break
             if attempt in (0, 5, 10):
                 subprocess.run(["partprobe", disk], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -442,25 +502,86 @@ def main(argv: list[str]) -> int:
                 subprocess.run(["udevadm", "settle", "--timeout=5"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1)
 
-        if not (os.path.exists(efi_part) and os.path.exists(root_part)):
-            eprint(f"ERROR: Partition nodes {efi_part} / {root_part} did not appear.")
+        if not all(os.path.exists(p) for p in expected_parts):
+            eprint(f"ERROR: Partition nodes {expected_parts} did not appear.")
             return 1
 
-        print(f"[os1-install] Formatting {efi_part} (FAT32) and {root_part} (ext4)...", flush=True)
+        print(f"[os1-install] Formatting {efi_part} (FAT32)...", flush=True)
         run_checked(["mkfs.fat", "-F", "32", "-n", "OS1_EFI", efi_part], stdout=subprocess.DEVNULL)
-        run_checked(
-            ["mkfs.ext4", "-F", "-O", "^orphan_file,^metadata_csum_seed", "-L", "OS1_ROOT", root_part],
-            stdout=subprocess.DEVNULL,
-        )
+
+        boot_uuid = ""
+        luks_uuid = ""
+        root_block_dev = root_part
+
+        if args.encrypt:
+            assert boot_part is not None and luks_passphrase is not None
+            print(f"[os1-install] Formatting {boot_part} (ext4 /boot) and initializing LUKS2 on {root_part}...", flush=True)
+            run_checked(
+                ["mkfs.ext4", "-F", "-O", "^orphan_file,^metadata_csum_seed", "-L", "OS1_BOOT", boot_part],
+                stdout=subprocess.DEVNULL,
+            )
+            luks_key_bytes = luks_passphrase.encode("utf-8")
+            try:
+                run_checked(
+                    [
+                        "cryptsetup",
+                        "luksFormat",
+                        "--type",
+                        "luks2",
+                        "--batch-mode",
+                        "--pbkdf",
+                        "pbkdf2",
+                        "--key-file",
+                        "-",
+                        root_part,
+                    ],
+                    input=luks_key_bytes,
+                )
+                run_checked(
+                    [
+                        "cryptsetup",
+                        "open",
+                        "--type",
+                        "luks2",
+                        "--key-file",
+                        "-",
+                        root_part,
+                        luks_mapper,
+                    ],
+                    input=luks_key_bytes,
+                )
+                luks_opened = True
+            finally:
+                luks_passphrase = ""
+                luks_key_bytes = b""
+
+            luks_uuid = subprocess.check_output(["cryptsetup", "luksUUID", root_part], text=True).strip()
+            boot_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", boot_part], text=True).strip()
+            root_block_dev = f"/dev/mapper/{luks_mapper}"
+            print(f"[os1-install] Formatting unlocked {root_block_dev} (ext4)...", flush=True)
+            run_checked(
+                ["mkfs.ext4", "-F", "-O", "^orphan_file,^metadata_csum_seed", "-L", "OS1_ROOT", root_block_dev],
+                stdout=subprocess.DEVNULL,
+            )
+        else:
+            print(f"[os1-install] Formatting {root_part} (ext4)...", flush=True)
+            run_checked(
+                ["mkfs.ext4", "-F", "-O", "^orphan_file,^metadata_csum_seed", "-L", "OS1_ROOT", root_part],
+                stdout=subprocess.DEVNULL,
+            )
 
         efi_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", efi_part], text=True).strip()
-        root_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", root_part], text=True).strip()
+        root_uuid = subprocess.check_output(["blkid", "-s", "UUID", "-o", "value", root_block_dev], text=True).strip()
         root_partuuid = subprocess.check_output(["blkid", "-s", "PARTUUID", "-o", "value", root_part], text=True).strip()
 
         # === STAGE 9: Filesystem population ===
         print(f"[os1-install] Mounting target partitions at {target}...", flush=True)
         target.mkdir(parents=True, exist_ok=True)
-        run_checked(["mount", root_part, str(target)])
+        run_checked(["mount", root_block_dev, str(target)])
+        if args.encrypt:
+            assert boot_part is not None
+            (target / "boot").mkdir(parents=True, exist_ok=True)
+            run_checked(["mount", boot_part, str(target / "boot")])
         (target / "boot" / "efi").mkdir(parents=True, exist_ok=True)
         run_checked(["mount", efi_part, str(target / "boot" / "efi")])
 
@@ -495,12 +616,24 @@ def main(argv: list[str]) -> int:
                     cleaned_lines.append(line)
             sddm_conf.write_text("\n".join(cleaned_lines).rstrip() + "\n", encoding="utf-8")
 
-        # Write real /etc/fstab with stable UUIDs
-        (target / "etc" / "fstab").write_text(
-            f"UUID={root_uuid}  /          ext4  defaults,noatime,errors=remount-ro  0  1\n"
-            f"UUID={efi_uuid}   /boot/efi  vfat  umask=0077                          0  2\n",
-            encoding="utf-8",
-        )
+        # Write real /etc/fstab (and /etc/crypttab when LUKS2 is enabled)
+        if args.encrypt:
+            (target / "etc" / "crypttab").write_text(
+                f"{luks_mapper} UUID={luks_uuid} none luks,discard\n",
+                encoding="utf-8",
+            )
+            (target / "etc" / "fstab").write_text(
+                f"/dev/mapper/{luks_mapper}  /          ext4  defaults,noatime,errors=remount-ro  0  1\n"
+                f"UUID={boot_uuid}   /boot      ext4  defaults,noatime                    0  2\n"
+                f"UUID={efi_uuid}    /boot/efi  vfat  umask=0077                          0  2\n",
+                encoding="utf-8",
+            )
+        else:
+            (target / "etc" / "fstab").write_text(
+                f"UUID={root_uuid}  /          ext4  defaults,noatime,errors=remount-ro  0  1\n"
+                f"UUID={efi_uuid}   /boot/efi  vfat  umask=0077                          0  2\n",
+                encoding="utf-8",
+            )
 
         # Hostname & hosts
         (target / "etc" / "hostname").write_text(f"{args.hostname}\n", encoding="utf-8")
@@ -570,6 +703,28 @@ def main(argv: list[str]) -> int:
         (target / "etc" / "os1").mkdir(parents=True, exist_ok=True)
         (target / "etc" / "os1" / "root-partuuid").write_text(f"{root_partuuid}\n", encoding="utf-8")
 
+        if args.encrypt:
+            (target / "etc" / "os1" / "luks-uuid").write_text(f"{luks_uuid}\n", encoding="utf-8")
+            (target / "etc" / "os1" / "boot-label").write_text("OS1_BOOT\n", encoding="utf-8")
+            print("[os1-install] Building LUKS2 unlock initramfs (/boot/initrd.img-os1-luks)...", flush=True)
+            luks_builder = target / "usr" / "sbin" / "os1-build-luks-initramfs"
+            if not luks_builder.is_file():
+                raise RuntimeError("LUKS2 initramfs builder missing: /usr/sbin/os1-build-luks-initramfs")
+            run_checked(
+                [
+                    "chroot",
+                    str(target),
+                    "/usr/sbin/os1-build-luks-initramfs",
+                    "--luks-uuid",
+                    luks_uuid,
+                    "--mapper",
+                    luks_mapper,
+                    "--output",
+                    "/boot/initrd.img-os1-luks",
+                ],
+                env=chroot_env,
+            )
+
         # Remove any legacy unversioned /boot/vmlinuz-os1 so os1-update-boot only tracks versioned kernels
         legacy_vmlinuz = target / "boot" / "vmlinuz-os1"
         if legacy_vmlinuz.exists():
@@ -591,7 +746,7 @@ set default=0
 set timeout=3
 
 menuentry "OS-1 ({kernel_rel})" {{
-    linux /boot/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+    linux /boot/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 apparmor=1 security=apparmor panic=-1
 }}
 
 menuentry "OS-1 Recovery ({kernel_rel})" {{
@@ -600,22 +755,37 @@ menuentry "OS-1 Recovery ({kernel_rel})" {{
 """
             (target / "boot" / "grub" / "grub.cfg").write_text(grub_cfg, encoding="utf-8")
 
-        # Embed a minimal bootstrap stub in BOOTX64.EFI that dynamically loads /boot/grub/grub.cfg
-        # from OS1_ROOT so kernel package upgrades & rollbacks take effect atomically without touching ESP.
+        # Embed a minimal bootstrap stub in BOOTX64.EFI that dynamically loads grub.cfg
+        # so kernel package upgrades & rollbacks take effect atomically without touching ESP.
         stub_cfg = target / "boot" / "grub" / "efi-bootstrap.cfg"
-        stub_cfg.write_text(
-            "insmod part_gpt\n"
-            "insmod fat\n"
-            "insmod ext2\n"
-            "search --no-floppy --set=root --label OS1_ROOT\n"
-            "if [ -f /boot/grub/grub.cfg ]; then\n"
-            "    configfile /boot/grub/grub.cfg\n"
-            "fi\n"
-            f"search --no-floppy --set=root --file /EFI/os1/{vmlinuz_versioned}\n"
-            f"linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1\n"
-            "boot\n",
-            encoding="utf-8",
-        )
+        if args.encrypt:
+            stub_cfg.write_text(
+                "insmod part_gpt\n"
+                "insmod fat\n"
+                "insmod ext2\n"
+                "search --no-floppy --set=root --label OS1_BOOT\n"
+                "if [ -f /grub/grub.cfg ]; then\n"
+                "    configfile /grub/grub.cfg\n"
+                "fi\n"
+                f"linux /{vmlinuz_versioned} root=/dev/mapper/{luks_mapper} cryptdevice=UUID={luks_uuid}:{luks_mapper} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 apparmor=1 security=apparmor panic=-1\n"
+                "initrd /initrd.img-os1-luks\n"
+                "boot\n",
+                encoding="utf-8",
+            )
+        else:
+            stub_cfg.write_text(
+                "insmod part_gpt\n"
+                "insmod fat\n"
+                "insmod ext2\n"
+                "search --no-floppy --set=root --label OS1_ROOT\n"
+                "if [ -f /boot/grub/grub.cfg ]; then\n"
+                "    configfile /boot/grub/grub.cfg\n"
+                "fi\n"
+                f"search --no-floppy --set=root --file /EFI/os1/{vmlinuz_versioned}\n"
+                f"linux /EFI/os1/{vmlinuz_versioned} root=PARTUUID={root_partuuid} rw console=tty0 console=ttyS0,115200n8 net.ifnames=0 apparmor=1 security=apparmor panic=-1\n"
+                "boot\n",
+                encoding="utf-8",
+            )
 
         run_checked(
             [
@@ -637,7 +807,7 @@ menuentry "OS-1 Recovery ({kernel_rel})" {{
 
         # === STAGE 12: Post-install validation ===
         print("[os1-install] Running post-install validation...", flush=True)
-        for required_path in (
+        required_paths = [
             target / "boot" / "efi" / "EFI" / "BOOT" / "BOOTX64.EFI",
             target / "boot" / "efi" / "EFI" / "os1" / vmlinuz_versioned,
             target / "boot" / vmlinuz_versioned,
@@ -645,7 +815,14 @@ menuentry "OS-1 Recovery ({kernel_rel})" {{
             target / "etc" / "os-release",
             target / "etc" / "machine-id",
             target / "home" / args.user,
-        ):
+        ]
+        if args.encrypt:
+            required_paths.extend([
+                target / "boot" / "initrd.img-os1-luks",
+                target / "etc" / "crypttab",
+                target / "etc" / "os1" / "luks-uuid",
+            ])
+        for required_path in required_paths:
             if not required_path.exists():
                 raise RuntimeError(f"Post-install validation failed: missing {required_path}")
 
@@ -665,7 +842,8 @@ menuentry "OS-1 Recovery ({kernel_rel})" {{
         cleanup_mounts()
 
         print("=== OS-1_INSTALL_COMPLETE ===")
-        print(f"[os1-install] Installed OS-1 to {args.disk} (ROOT_UUID={root_uuid}, EFI_UUID={efi_uuid}).")
+        enc_msg = f", LUKS_UUID={luks_uuid}" if args.encrypt else ""
+        print(f"[os1-install] Installed OS-1 to {args.disk} (ROOT_UUID={root_uuid}, EFI_UUID={efi_uuid}{enc_msg}).")
         print("[os1-install] Remove the installation media and reboot.", flush=True)
         return 0
     finally:

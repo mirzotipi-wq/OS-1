@@ -16,7 +16,7 @@ DEBIAN_SUITE="${OS1_DEBIAN_SUITE:-bookworm}"
 DEBIAN_MIRROR="${OS1_DEBIAN_MIRROR:-http://deb.debian.org/debian}"
 OS1_PROFILE="${OS1_PROFILE:-minimal}"
 if [[ "${OS1_PROFILE}" == "desktop" ]]; then
-    IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-6144}"
+    IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-7680}"
 else
     IMAGE_SIZE_MB="${OS1_ROOTFS_SIZE_MB:-2048}"
 fi
@@ -61,6 +61,13 @@ PACKAGES=(
     python3
     ufw
     nftables
+    apparmor
+    apparmor-utils
+    cryptsetup
+    cryptsetup-bin
+    unattended-upgrades
+    busybox-static
+    cpio
 )
 
 DESKTOP_PACKAGES=(
@@ -96,6 +103,21 @@ DESKTOP_PACKAGES=(
     upower
     power-profiles-daemon
     ufw
+    apparmor-profiles
+    flatpak
+    plasma-discover
+    plasma-discover-backend-flatpak
+    python3-pyqt5
+    sbsigntool
+    mokutil
+    firmware-linux-free
+    firmware-misc-nonfree
+    firmware-iwlwifi
+    firmware-amd-graphics
+    firmware-realtek
+    firmware-atheros
+    intel-microcode
+    amd64-microcode
     orca
     konsole
     dolphin
@@ -140,7 +162,7 @@ check_disk_space_mb() {
 }
 
 if [[ "${OS1_PROFILE}" == "desktop" ]]; then
-    check_disk_space_mb "${OUT_ROOT}" 8192
+    check_disk_space_mb "${OUT_ROOT}" 10240
 else
     check_disk_space_mb "${OUT_ROOT}" 4096
 fi
@@ -156,19 +178,21 @@ mkdir -p "${ROOTFS_DIR}" "${IMAGE_DIR}"
 PKG_CSV="$(IFS=,; echo "${PACKAGES[*]}")"
 
 if command -v mmdebstrap >/dev/null 2>&1; then
-    echo "[os1-rootfs] Bootstrapping Debian ${DEBIAN_SUITE} via mmdebstrap..."
+    echo "[os1-rootfs] Bootstrapping Debian ${DEBIAN_SUITE} (main, contrib, non-free-firmware) via mmdebstrap..."
     mmdebstrap \
         --arch=amd64 \
         --variant=minbase \
+        --components="main contrib non-free-firmware" \
         --include="${PKG_CSV}" \
         "${DEBIAN_SUITE}" \
         "${ROOTFS_DIR}" \
         "${DEBIAN_MIRROR}"
 elif command -v debootstrap >/dev/null 2>&1; then
-    echo "[os1-rootfs] Bootstrapping Debian ${DEBIAN_SUITE} via debootstrap..."
+    echo "[os1-rootfs] Bootstrapping Debian ${DEBIAN_SUITE} (main, contrib, non-free-firmware) via debootstrap..."
     debootstrap \
         --arch=amd64 \
         --variant=minbase \
+        --components=main,contrib,non-free-firmware \
         --include="${PKG_CSV}" \
         "${DEBIAN_SUITE}" \
         "${ROOTFS_DIR}" \
@@ -254,6 +278,8 @@ echo '${DEV_USER}:${DEV_PASS}' | chpasswd
 systemctl enable NetworkManager.service
 systemctl enable serial-getty@ttyS0.service
 systemctl enable ufw.service
+systemctl enable apparmor.service
+systemctl enable unattended-upgrades.service || true
 if [ -d /lib/modules ]; then
     for kdir in /lib/modules/*; do
         [ -d \"\$kdir\" ] && depmod -a \"\$(basename \"\$kdir\")\"
@@ -306,6 +332,9 @@ EOF
 systemctl enable sddm.service
 systemctl set-default graphical.target
 fc-cache -f || true
+if command -v flatpak >/dev/null 2>&1; then
+    flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
+fi
 "
 fi
 
@@ -362,6 +391,18 @@ done
 
 chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin DEBIAN_FRONTEND=noninteractive \
     dpkg -i "${OS1_DEB_ARGS[@]}"
+
+# Enable OS-1 native zram swap service installed by os1-tools
+chroot "${ROOTFS_DIR}" /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin systemctl enable os1-zram.service
+
+# Place graphical installer shortcut on live user's Desktop (deleted automatically when live user is removed on install)
+if [[ "${OS1_PROFILE}" == "desktop" && -f "${ROOTFS_DIR}/usr/share/applications/os1-installer.desktop" ]]; then
+    mkdir -p "${ROOTFS_DIR}/home/${DEV_USER}/Desktop"
+    cp -f "${ROOTFS_DIR}/usr/share/applications/os1-installer.desktop" \
+        "${ROOTFS_DIR}/home/${DEV_USER}/Desktop/os1-installer.desktop"
+    chmod 0755 "${ROOTFS_DIR}/home/${DEV_USER}/Desktop/os1-installer.desktop"
+    chroot "${ROOTFS_DIR}" chown -R "${DEV_USER}:${DEV_USER}" "/home/${DEV_USER}/Desktop"
+fi
 
 echo "[os1-rootfs] Verifying OS-1 package database integrity (dpkg --audit & dpkg -V)..."
 AUDIT_OUT="$(chroot "${ROOTFS_DIR}" dpkg --audit)"

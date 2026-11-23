@@ -179,6 +179,9 @@ def main() -> int:
 
     persistence_token = "OS1-PHASE2-PERSISTENCE-VERIFIED-2026"
 
+    from os1_test_util import expected_kernel_release
+    expected_krel = expected_kernel_release(repo_root, out_root)
+
     # --- BOOT 1: Login, kernel check, network, apt install, file write, poweroff ---
     print("=== Phase 2 Boot 1: Userspace, Networking, APT Install, File Write ===", flush=True)
     vm1 = QemuSession(kernel_path, work_disk, boot1_log)
@@ -186,13 +189,13 @@ def main() -> int:
         vm1.login("os1", "os1")
 
         out = vm1.run_cmd("id -u && uname -r && grep '^ID=' /etc/os-release", "IDCHECK", timeout=30.0)
-        if "7.4.0-rc3-os1" not in out:
-            raise RuntimeError(f"Kernel release mismatch! Output:\n{out}")
+        if expected_krel not in out:
+            raise RuntimeError(f"Kernel release mismatch (expected {expected_krel})! Output:\n{out}")
         if "ID=os1" not in out:
             raise RuntimeError(f"/etc/os-release mismatch! Output:\n{out}")
         if "\n0\n" in out:
             raise RuntimeError(f"Expected non-root UID, got 0! Output:\n{out}")
-        print("[PASS] Non-root UID, OS-1 kernel (7.4.0-rc3-os1), and ID=os1 verified", flush=True)
+        print(f"[PASS] Non-root UID, OS-1 kernel ({expected_krel}), and ID=os1 verified", flush=True)
 
         # Wait up to 60s for NetworkManager DHCP on eth0
         vm1.run_cmd(
@@ -236,8 +239,8 @@ def main() -> int:
         )
         if persistence_token not in out:
             raise RuntimeError(f"Persistent file content missing after reboot! Output:\n{out}")
-        if "7.4.0-rc3-os1" not in out:
-            raise RuntimeError(f"OS-1 kernel release missing on Boot 2! Output:\n{out}")
+        if expected_krel not in out:
+            raise RuntimeError(f"OS-1 kernel release ({expected_krel}) missing on Boot 2! Output:\n{out}")
         print("[PASS] Persistent file AND installed 'tree' package survived reboot!", flush=True)
 
         vm2.poweroff_and_wait("os1")

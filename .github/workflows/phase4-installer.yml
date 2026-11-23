@@ -21,7 +21,7 @@ jobs:
   phase4-clean-disk-install:
     name: Install OS-1 from UEFI Live ISO to Blank Disk & Verify 2 Reboots
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Check out OS-1 repository (shallow)
@@ -48,6 +48,7 @@ jobs:
             cpio \
             kmod \
             xz-utils \
+            curl \
             busybox-static \
             mmdebstrap \
             debian-archive-keyring \
@@ -69,9 +70,9 @@ jobs:
       - name: Compute exact kernel source & toolchain cache key
         id: kkey
         run: |
-          TREE_HASH="$(git rev-parse HEAD:Makefile HEAD:arch/x86 HEAD:drivers HEAD:kernel HEAD:mm HEAD:net HEAD:fs HEAD:include HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
+          TREE_HASH="$(git rev-parse HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
           GCC_HASH="$(gcc --version | head -n 1 | sha256sum | awk '{print $1}')"
-          echo "key=os1-kernel-x86_64-v3-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
+          echo "key=os1-kernel-lts-x86_64-v4-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached OS-1 x86_64 kernel
         id: kernel-cache
@@ -89,6 +90,9 @@ jobs:
 
       - name: Run automated clean-disk install, ISO detach & 2-reboot test (T4-INSTALL)
         run: ./distro/tools/os1.sh install-test
+
+      - name: Run automated LUKS2 full-disk encryption install & encrypted UEFI boot test (T25-LUKS)
+        run: ./distro/tools/os1.sh luks-install-test
 
       - name: Run automated signed update, versioned kernel upgrade & GRUB rollback test (T20-UPDATE-ROLLBACK)
         run: OS1_UPDATE_DISK_GB=6 ./distro/tools/os1.sh update-rollback-test

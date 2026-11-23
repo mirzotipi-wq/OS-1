@@ -50,6 +50,8 @@ jobs:
             cpio \
             kmod \
             xz-utils \
+            curl \
+            busybox-static \
             mmdebstrap \
             debian-archive-keyring \
             e2fsprogs \
@@ -72,9 +74,9 @@ jobs:
       - name: Compute exact kernel source & toolchain cache key
         id: kkey
         run: |
-          TREE_HASH="$(git rev-parse HEAD:Makefile HEAD:arch/x86 HEAD:drivers HEAD:kernel HEAD:mm HEAD:net HEAD:fs HEAD:include HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
+          TREE_HASH="$(git rev-parse HEAD:distro/kernel HEAD:distro/tests/kernel-driver-audit.py | sha256sum | awk '{print $1}')"
           GCC_HASH="$(gcc --version | head -n 1 | sha256sum | awk '{print $1}')"
-          echo "key=os1-kernel-x86_64-v3-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
+          echo "key=os1-kernel-lts-x86_64-v4-${TREE_HASH:0:20}-${GCC_HASH:0:12}" >> "$GITHUB_OUTPUT"
 
       - name: Restore cached OS-1 x86_64 kernel
         id: kernel-cache
@@ -91,7 +93,18 @@ jobs:
         run: python3 distro/tests/kernel-driver-audit.py --check-modules
 
       - name: Build signed native OS-1 .deb packages, versioned kernel .deb & APT repository (T14-DEBS / T20-SIGN)
-        run: OS1_EPHEMERAL_GPG=1 ./distro/tools/os1.sh debs
+        env:
+          OS1_GPG_PRIVATE_KEY: ${{ secrets.OS1_GPG_PRIVATE_KEY }}
+          OS1_GPG_PASSPHRASE: ${{ secrets.OS1_GPG_PASSPHRASE }}
+        run: |
+          source distro/VERSION
+          if [[ "${GITHUB_REF}" == refs/tags/v* && -n "${OS1_GPG_PRIVATE_KEY}" ]]; then
+            echo "[ci] Tag release with production OS1_GPG_PRIVATE_KEY -> signing with release key & configuring GitHub Pages APT URL"
+            OS1_APT_REPO_URL="${OS1_APT_PAGES_URL}" ./distro/tools/os1.sh debs
+          else
+            echo "[ci] Using ephemeral CI GPG key for verification build"
+            OS1_EPHEMERAL_GPG=1 ./distro/tools/os1.sh debs
+          fi
 
       - name: Build full OS-1 Wayland Desktop rootfs & verify package lifecycle (T15-DESKTOP-ISO / T19-PKG)
         run: |
@@ -204,16 +217,84 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           source distro/VERSION
-          NOTES="OS-1 ${OS1_VERSION} (${TAG}) — Qualified x86-64 UEFI Release Candidate.
+          source distro/kernel/KERNEL_LTS.env
+          IS_PRERELEASE=""
+          if [[ "${OS1_VERSION}" == *"-rc"* || "${TAG}" == *"-rc"* ]]; then
+            IS_PRERELEASE="--prerelease"
+          fi
+          NOTES="OS-1 ${OS1_VERSION} (${TAG}) — Qualified x86-64 UEFI Desktop Distribution (Linux ${OS1_KERNEL_VERSION} LTS).
 
-          - Automated CI-Verified (Tier 0 QEMU/OVMF): kernel + modules (69 driver symbols), UFW/nftables behavioral firewall, preflight-safe/credential-safe installer, 8 native .deb packages + versioned kernel .deb, signed APT repo + GRUB rollback, full installed SDDM/Wayland desktop session, CycloneDX 1.5 SBOM, and byte-for-byte .deb reproducibility.
+          - Automated CI-Verified (Tier 0 QEMU/OVMF): pinned SHA-256-verified Linux ${OS1_KERNEL_VERSION} LTS kernel + modules (80 verified symbols), AppArmor LSM + sysctl hardening + UFW/nftables behavioral firewall + unattended security updates, zram swap, preflight-safe/credential-safe CLI & PyQt5 graphical installer with opt-in LUKS2 full-disk encryption, 8 native .deb packages + versioned kernel .deb, signed APT repo + GRUB rollback, Flatpak/Flathub + Plasma Discover, Debian non-free-firmware + CPU microcode, MOK Secure Boot tooling, full installed SDDM/Wayland desktop session, CycloneDX 1.5 SBOM, and byte-for-byte .deb reproducibility.
           - Hardware-Gated (Tier 1): Physical Intel/AMD bare-metal UEFI testing required before 1.0 GA (see docs/SUPPORTED_HARDWARE.md).
-          - Human/Legal-Gated: Human accessibility review, legal/trade-dress review, and offline production GPG key custody required before 1.0 GA."
+          - Human/Legal-Gated: Human accessibility review, legal/trade-dress review, and offline production GPG key custody."
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" release-bundle/* --clobber
           else
             gh release create "${TAG}" release-bundle/* \
               --title "OS-1 ${OS1_VERSION} (${TAG})" \
-              --prerelease \
+              ${IS_PRERELEASE} \
               --notes "${NOTES}"
           fi
+
+  publish-apt-pages:
+    name: Publish Signed OS-1 APT Repository to GitHub Pages
+    needs: phase14-15-release-qualification
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Check out OS-1 repository (shallow)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Download qualified OS-1 release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: os1-release-bundle
+          path: release-bundle
+
+      - name: Assemble GitHub Pages APT repository site
+        run: |
+          source distro/VERSION
+          source distro/kernel/KERNEL_LTS.env
+          mkdir -p _site/apt
+          cp -f release-bundle/*.deb _site/apt/
+          cp -f release-bundle/Packages release-bundle/Packages.gz \
+                release-bundle/Release release-bundle/InRelease release-bundle/Release.gpg \
+                release-bundle/os1-archive-keyring.gpg release-bundle/SHA256SUMS _site/apt/
+          cat > _site/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head><meta charset="utf-8"><title>OS-1 APT Repository (${OS1_VERSION})</title></head>
+          <body style="font-family:system-ui,sans-serif;max-width:720px;margin:3rem auto;padding:0 1rem;line-height:1.5">
+            <h1>OS-1 GNU/Linux Signed APT Repository</h1>
+            <p>Version: <strong>${OS1_VERSION}</strong> | Kernel: <strong>Linux ${OS1_KERNEL_VERSION} LTS</strong></p>
+            <p>Configure on Debian 12 / OS-1:</p>
+            <pre>curl -fsSL ${OS1_APT_PAGES_URL}/os1-archive-keyring.gpg | sudo tee /usr/share/keyrings/os1-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/os1-archive-keyring.gpg] ${OS1_APT_PAGES_URL} ./" | sudo tee /etc/apt/sources.list.d/os1.list
+          sudo apt-get update</pre>
+            <p><a href="apt/Release">Release</a> | <a href="apt/InRelease">InRelease</a> | <a href="apt/os1-archive-keyring.gpg">Archive Keyring</a> | <a href="apt/SHA256SUMS">SHA256SUMS</a></p>
+          </body>
+          </html>
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload GitHub Pages APT artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+      - name: Deploy signed APT repository to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# OS-1 Deterministic LUKS2 Unlock Initramfs Builder
+# Bundles static BusyBox + cryptsetup + required shared libraries from a target
+# rootfs into a compact cpio.gz initramfs that unlocks a LUKS2 root volume and
+# switches root to /sbin/init.
+set -euo pipefail
+
+ROOT_DIR="/"
+LUKS_UUID=""
+MAPPER_NAME="os1_crypt"
+OUT_IMG=""
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") --luks-uuid UUID --output PATH [--root DIR] [--mapper NAME]
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --root) ROOT_DIR="$2"; shift 2 ;;
+        --luks-uuid) LUKS_UUID="$2"; shift 2 ;;
+        --mapper) MAPPER_NAME="$2"; shift 2 ;;
+        --output) OUT_IMG="$2"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "ERROR: Unknown argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+if [[ -z "${LUKS_UUID}" || -z "${OUT_IMG}" ]]; then
+    echo "ERROR: --luks-uuid and --output are required." >&2
+    usage
+    exit 2
+fi
+
+ROOT_DIR="${ROOT_DIR%/}"
+[[ -n "${ROOT_DIR}" ]] || ROOT_DIR="/"
+
+resolve_in_root() {
+    local rel="$1"
+    if [[ "${ROOT_DIR}" == "/" ]]; then
+        echo "${rel}"
+    else
+        echo "${ROOT_DIR}${rel}"
+    fi
+}
+
+BUSYBOX_BIN=""
+for cand in /bin/busybox /usr/bin/busybox; do
+    p="$(resolve_in_root "${cand}")"
+    if [[ -x "${p}" ]]; then
+        BUSYBOX_BIN="${p}"
+        break
+    fi
+done
+if [[ -z "${BUSYBOX_BIN}" ]]; then
+    echo "ERROR: busybox not found under ${ROOT_DIR} (install busybox-static)." >&2
+    exit 1
+fi
+
+CRYPTSETUP_BIN=""
+for cand in /sbin/cryptsetup /usr/sbin/cryptsetup; do
+    p="$(resolve_in_root "${cand}")"
+    if [[ -x "${p}" ]]; then
+        CRYPTSETUP_BIN="${p}"
+        break
+    fi
+done
+if [[ -z "${CRYPTSETUP_BIN}" ]]; then
+    echo "ERROR: cryptsetup not found under ${ROOT_DIR}." >&2
+    exit 1
+fi
+
+BLKID_BIN=""
+for cand in /sbin/blkid /usr/sbin/blkid; do
+    p="$(resolve_in_root "${cand}")"
+    if [[ -x "${p}" ]]; then
+        BLKID_BIN="${p}"
+        break
+    fi
+done
+
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/os1-luks-initramfs.XXXXXX")"
+trap 'rm -rf "${STAGE}"' EXIT
+
+mkdir -p "${STAGE}"/{bin,sbin,etc,proc,sys,dev,run,newroot,tmp,lib,lib64,usr/lib}
+mkdir -p "${STAGE}/run/cryptsetup"
+
+copy_with_libs() {
+    local src_path="$1"
+    local dst_rel="$2"
+    mkdir -p "${STAGE}$(dirname "${dst_rel}")"
+    cp -L "${src_path}" "${STAGE}${dst_rel}"
+    chmod 0755 "${STAGE}${dst_rel}"
+
+    # Collect shared library dependencies via ldd (skip if statically linked)
+    local ldd_out
+    ldd_out="$(ldd "${src_path}" 2>/dev/null || true)"
+    if echo "${ldd_out}" | grep -qi "not a dynamic executable\|statically linked"; then
+        return 0
+    fi
+    while IFS= read -r lib; do
+        [[ -n "${lib}" ]] || continue
+        local host_lib=""
+        if [[ "${ROOT_DIR}" != "/" && -e "${ROOT_DIR}${lib}" ]]; then
+            host_lib="${ROOT_DIR}${lib}"
+        elif [[ -e "${lib}" ]]; then
+            host_lib="${lib}"
+        fi
+        if [[ -n "${host_lib}" ]]; then
+            mkdir -p "${STAGE}$(dirname "${lib}")"
+            cp -L "${host_lib}" "${STAGE}${lib}"
+        fi
+    done < <(echo "${ldd_out}" | grep -oE '/[^ ]+' | sort -u)
+}
+
+copy_with_libs "${BUSYBOX_BIN}" "/bin/busybox"
+for applet in sh mount umount switch_root mkdir rmdir sleep cat echo grep ls mknod ln cp mv rm poweroff reboot uname sed awk stty readlink; do
+    ln -sf busybox "${STAGE}/bin/${applet}"
+done
+ln -sf ../bin/busybox "${STAGE}/sbin/switch_root"
+
+copy_with_libs "${CRYPTSETUP_BIN}" "/sbin/cryptsetup"
+if [[ -n "${BLKID_BIN}" ]]; then
+    copy_with_libs "${BLKID_BIN}" "/sbin/blkid"
+fi
+
+# Include OpenSSL/libgcc_s if present in target rootfs (needed by Argon2id/LUKS2 crypto backends)
+for extra_glob in \
+    "/lib/x86_64-linux-gnu/libgcc_s.so.1" \
+    "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1" \
+    "/usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so"; do
+    p="$(resolve_in_root "${extra_glob}")"
+    if [[ -e "${p}" ]]; then
+        mkdir -p "${STAGE}$(dirname "${extra_glob}")"
+        cp -L "${p}" "${STAGE}${extra_glob}"
+    fi
+done
+
+cat > "${STAGE}/etc/os1-luks.conf" <<EOF
+LUKS_UUID="${LUKS_UUID}"
+MAPPER_NAME="${MAPPER_NAME}"
+EOF
+
+cat > "${STAGE}/init" <<'INITEOF'
+#!/bin/sh
+set -u
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t tmpfs -o mode=0755 tmpfs /run
+mkdir -p /run/cryptsetup /dev/mapper /newroot
+
+# shellcheck disable=SC1091
+. /etc/os1-luks.conf
+
+# Allow cmdline override cryptdevice=UUID=<uuid>:<name>
+for tok in $(cat /proc/cmdline); do
+    case "${tok}" in
+        cryptdevice=UUID=*)
+            spec="${tok#cryptdevice=UUID=}"
+            LUKS_UUID="${spec%%:*}"
+            rest="${spec#*:}"
+            if [ -n "${rest}" ] && [ "${rest}" != "${spec}" ]; then
+                MAPPER_NAME="${rest}"
+            fi
+            ;;
+    esac
+done
+
+echo "=== OS-1_LUKS_INITRAMFS_START ==="
+echo "[os1-luks] Locating encrypted volume UUID=${LUKS_UUID}..."
+
+CRYPT_DEV=""
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if [ -x /sbin/blkid ]; then
+        CRYPT_DEV="$(/sbin/blkid -U "${LUKS_UUID}" 2>/dev/null || true)"
+    fi
+    if [ -z "${CRYPT_DEV}" ]; then
+        for dev in /dev/vda3 /dev/sda3 /dev/nvme0n1p3 /dev/vdb3 /dev/sdb3; do
+            if [ -b "${dev}" ] && /sbin/cryptsetup isLuks "${dev}" 2>/dev/null; then
+                CRYPT_DEV="${dev}"
+                break
+            fi
+        done
+    fi
+    [ -n "${CRYPT_DEV}" ] && break
+    sleep 1
+done
+
+if [ -z "${CRYPT_DEV}" ]; then
+    echo "ERROR: Could not locate LUKS2 root device (UUID=${LUKS_UUID})!"
+    ls -la /dev/vd* /dev/sd* /dev/nvme* 2>/dev/null || true
+    exec /bin/sh
+fi
+
+echo "[os1-luks] Found LUKS2 volume at ${CRYPT_DEV}."
+
+# Prompt up to 5 times for passphrase (works on both graphical tty0 and serial ttyS0)
+UNLOCKED=0
+for tries in 1 2 3 4 5; do
+    printf "OS-1_LUKS_PASSPHRASE_PROMPT (%s): " "${CRYPT_DEV}"
+    if /sbin/cryptsetup open --type luks2 --tries 1 "${CRYPT_DEV}" "${MAPPER_NAME}"; then
+        UNLOCKED=1
+        break
+    fi
+    echo "[os1-luks] Passphrase rejected (attempt ${tries}/5)."
+done
+
+if [ "${UNLOCKED}" -ne 1 ] || [ ! -b "/dev/mapper/${MAPPER_NAME}" ]; then
+    echo "ERROR: Failed to unlock LUKS2 volume ${CRYPT_DEV}!"
+    exec /bin/sh
+fi
+
+echo "=== OS-1_LUKS_UNLOCKED ==="
+mount -t ext4 -o rw "/dev/mapper/${MAPPER_NAME}" /newroot || {
+    echo "ERROR: Failed to mount unlocked root /dev/mapper/${MAPPER_NAME}!"
+    exec /bin/sh
+}
+
+mkdir -p /newroot/run
+mount --move /run /newroot/run 2>/dev/null || true
+echo "=== OS-1_LUKS_SWITCH_ROOT ==="
+exec switch_root /newroot /sbin/init
+INITEOF
+chmod 0755 "${STAGE}/init"
+
+mkdir -p "$(dirname "${OUT_IMG}")"
+(
+    cd "${STAGE}"
+    find . -print0 | LC_ALL=C sort -z | cpio --null -o --format=newc --owner=0:0 2>/dev/null | gzip -9 -n > "${OUT_IMG}"
+)
+chmod 0644 "${OUT_IMG}"
+echo "[os1-luks-initramfs] Built ${OUT_IMG} ($(stat -c%s "${OUT_IMG}") bytes)"

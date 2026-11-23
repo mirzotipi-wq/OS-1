@@ -1,33 +1,28 @@
 # OS-1 Release Process & Qualification Gates
 
-## Canonical Version Source
+## Canonical Version & Kernel Sources
 
-All OS-1 artifacts read their release version from [`distro/VERSION`](../distro/VERSION):
-- `OS1_VERSION` (e.g., `1.0-rc2`)
-- `OS1_DEB_VERSION` (e.g., `1.0.0~rc2-1`)
+- **Release Version:** [`distro/VERSION`](../distro/VERSION) (`OS1_VERSION`, `OS1_DEB_VERSION`, `OS1_APT_PAGES_URL`)
+- **Pinned LTS Kernel:** [`distro/kernel/KERNEL_LTS.env`](../distro/kernel/KERNEL_LTS.env) (`OS1_KERNEL_VERSION`, `OS1_KERNEL_CHANNEL`, `OS1_KERNEL_URL`, `OS1_KERNEL_SHA256`)
 
-## Release Candidate (`1.0-rc2`) Automated Gates
+## Automated CI Qualification Gates
 
-Every release-candidate tag (`v1.0.0-rc2`) **MUST** pass all 6 mandatory GitHub Actions workflows on the exact tagged commit:
-1. `phase1-kernel-boot.yml` — Kernel + modules build, `T22-DRIVERS` (69 symbols + `.ko` check), QEMU serial boot.
+Every release tag (`v1.0.0-rc3`, `v1.0.0`) **MUST** pass all 6 mandatory GitHub Actions workflows on the exact tagged commit:
+1. `phase1-kernel-boot.yml` — Pinned SHA-256-verified Linux LTS kernel + modules build (zero `-rc` enforced), `T22-DRIVERS` (80 verified symbols + `.ko` check), QEMU serial boot.
 2. `phase2-userspace.yml` — Debian 12 userspace, native `.deb` assembly, NetworkManager, APT, 2-boot persistence, `T17-FIREWALL` behavioral traffic drop/allow/re-drop/reboot persistence.
 3. `phase3-live-iso.yml` — Minimal UEFI Live ISO + Recovery mode in OVMF.
-4. `phase4-installer.yml` — `T4-INSTALL` (special-char password, live user/autologin removal, 2 reboots) + `T20-UPDATE-ROLLBACK` (unsigned rejection, signed upgrade, kernel A→B upgrade, bad-kernel B→A GRUB rollback).
+4. `phase4-installer.yml` — `T4-INSTALL` (special-char password, live user/autologin removal, AppArmor/sysctl/zram verification, 2 reboots), `T25-LUKS` (opt-in LUKS2 full-disk encryption install, initramfs passphrase unlock, encrypted root boot), and `T20-UPDATE-ROLLBACK` (unsigned rejection, signed upgrade, kernel A→B upgrade, bad-kernel B→A GRUB rollback).
 5. `phase5-wayland-desktop.yml` — KDE Plasma/KWin Wayland session, Light/Dark screenshots, notifications, apps, audio, accessibility, reboot persistence.
-6. `phase14-15-release-qualification.yml` — Signed `.deb`s + versioned kernel `.deb`, `lintian` 0 errors, `T19-PKG` lifecycle, Desktop UEFI Live ISO, `T17-FIREWALL`, CycloneDX 1.5 SBOM + strict `sbom-verify-test.py`, `T15-ISO-BOOT`, `T21-INSTALLED-GUI` (genuine SDDM graphical login as installer-created user `alice`), and tag-triggered GitHub Release asset publication.
+6. `phase14-15-release-qualification.yml` — Signed `.deb`s + versioned kernel `.deb`, `lintian` 0 errors, `T19-PKG` lifecycle, Desktop UEFI Live ISO (with `non-free-firmware`, microcode, Flatpak/Flathub, Discover, `os1-install-gui`), `T17-FIREWALL`, CycloneDX 1.5 SBOM + strict `sbom-verify-test.py`, `T15-ISO-BOOT`, `T21-INSTALLED-GUI` (genuine SDDM graphical login as installer-created user `alice`), GitHub Release publication, and GitHub Pages signed APT repository deployment.
 
-## Durable GitHub Release Assets
+## Durable Release & Hosted APT Artifacts
 
-On pushing a `v*` tag, `phase14-15-release-qualification.yml` publishes the exact tested artifacts to the GitHub Release:
-- `os1-<version>-x86_64.iso`
-- All 8 native OS-1 `.deb` packages + `linux-image-os1-*.deb`
-- Signed APT repository metadata (`InRelease`, `Release`, `Release.gpg`, `Packages`, `Packages.gz`, `os1-archive-keyring.gpg`)
-- `SHA256SUMS`, `os1-sbom.cdx.json`, `provenance.json`, `driver-manifest.json`
+On pushing a `v*` tag, `phase14-15-release-qualification.yml` publishes:
+1. **GitHub Release Assets:** `os1-<version>-x86_64.iso`, all 8 native OS-1 `.deb` packages + `linux-image-os1-*.deb`, signed APT metadata (`InRelease`, `Release`, `Release.gpg`, `Packages`, `Packages.gz`, `os1-archive-keyring.gpg`), `SHA256SUMS`, `os1-sbom.cdx.json`, `provenance.json`, `driver-manifest.json`.
+2. **GitHub Pages Signed APT Repository (`https://mirzotipi-wq.github.io/OS-1/apt`):** Deployed via `publish-apt-pages` so installed OS-1 systems receive signed package and LTS kernel updates over HTTPS.
 
-## Mandatory Human & Hardware Gates Before `OS-1 1.0` GA
+## Production GPG Key Custody & 1-Step GA Cutover
 
-A release candidate **MUST NOT** be promoted to `OS-1 1.0` General Availability until:
-1. **Kernel Baseline:** Kernel is rebased onto an upstream final stable or LTS Linux release (zero `-rc` suffix).
-2. **Physical Hardware (Tier 1):** Bare-metal UEFI qualification checklist in [`docs/SUPPORTED_HARDWARE.md`](SUPPORTED_HARDWARE.md) passes on at least one Intel and one AMD physical x86-64 machine.
-3. **Production Signing Key Custody:** Release APT metadata and checksums are signed with an offline-held production release GPG key (not an ephemeral CI key).
-4. **Human Accessibility & Legal Review:** Sign-off on screen reader/keyboard usability and open-source asset/trade-dress compliance.
+- **CI Production Signing:** Configure `OS1_GPG_PRIVATE_KEY` (and optional `OS1_GPG_PASSPHRASE`) in GitHub Repository Secrets before pushing a GA tag.
+- **Air-Gapped Offline Signing:** Download the qualified release bundle and run `./distro/tools/os1-sign-release.sh <bundle-dir> <gpg-key-id>` on an offline signing workstation to re-sign `InRelease`, `Release.gpg`, and `SHA256SUMS.asc`.
+- **1-Step GA Cutover:** Once bare-metal Tier 1 hardware testing and human legal/accessibility sign-off are complete, run `./distro/tools/os1-cutover-ga.sh` to verify all software gates, bump `distro/VERSION` to `1.0` (`1.0.0-1`), run `os1.sh audit`, and tag `v1.0.0`.

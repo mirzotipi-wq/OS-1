@@ -298,10 +298,13 @@ def main() -> int:
             vm.expect("os1@os1:", timeout=60.0)
             print("[PASS] Serial console authenticated on desktop image", flush=True)
 
+            from os1_test_util import expected_kernel_release
+            expected_krel = expected_kernel_release(repo_root, out_root)
+
             out = vm.run_cmd("uname -r && systemctl is-active sddm.service", "SDDM", timeout=60.0)
-            if "7.4.0-rc3-os1" not in out or "active" not in out:
-                raise RuntimeError(f"Expected OS-1 kernel + active SDDM, got:\n{out}")
-            print("[PASS] OS-1 kernel (7.4.0-rc3-os1) + sddm.service active", flush=True)
+            if expected_krel not in out or "active" not in out:
+                raise RuntimeError(f"Expected OS-1 kernel ({expected_krel}) + active SDDM, got:\n{out}")
+            print(f"[PASS] OS-1 kernel ({expected_krel}) + sddm.service active", flush=True)
 
             # Wait up to 180s for KWin Wayland + Plasma Shell + Wayland socket to come up (TCG software rendering)
             vm.run_cmd(

@@ -205,7 +205,64 @@ def main() -> int:
         assert sha256_file(disk_ok) == disk_ok_sha
         print("[PASS] Missing kernel and missing rootfs artifacts rejected before disk access", flush=True)
 
-        print("[os1-installer-safety-test] ALL PHASE 18 PREFLIGHT & CREDENTIAL SAFETY TESTS PASSED.", flush=True)
+        # 5. LUKS2 encryption preflight & credential-safety tests
+        res_plain_luks = subprocess.run(
+            [
+                sys.executable, str(installer),
+                "--source-ro", str(src_ro),
+                "--source-kernel", str(src_kernel),
+                "--disk", str(disk_ok),
+                "--user", "alice",
+                "--encrypt",
+                "--luks-passphrase", "forbidden-argv-passphrase",
+                "--dry-run",
+                "--allow-file-target-for-preflight-test",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert res_plain_luks.returncode == 2, f"Expected rc=2 for plaintext --luks-passphrase, got {res_plain_luks.returncode}"
+        assert "forbidden-argv-passphrase" not in (res_plain_luks.stdout + res_plain_luks.stderr)
+
+        luks_secret = "OS1-LUKS2-Secret-2026!"
+        lr, lw = os.pipe()
+        os.write(lw, (luks_secret + "\n").encode("utf-8"))
+        os.close(lw)
+        try:
+            res_luks_plan = subprocess.run(
+                [
+                    sys.executable, str(installer),
+                    "--source-ro", str(src_ro),
+                    "--source-kernel", str(src_kernel),
+                    "--disk", str(disk_ok),
+                    "--user", "alice",
+                    "--encrypt",
+                    "--luks-passphrase-fd", str(lr),
+                    "--json-plan",
+                    "--allow-file-target-for-preflight-test",
+                ],
+                pass_fds=(lr,),
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            os.close(lr)
+        assert res_luks_plan.returncode == 0, f"LUKS2 --json-plan failed: {res_luks_plan.stderr}"
+        assert luks_secret not in (res_luks_plan.stdout + res_luks_plan.stderr)
+        plan_luks = json.loads(res_luks_plan.stdout)
+        assert plan_luks["encryption_enabled"] is True
+        assert plan_luks["encryption_type"] == "luks2"
+        assert plan_luks["boot_partition_mib"] == 512
+        assert sha256_file(disk_ok) == disk_ok_sha
+        print("[PASS] LUKS2 encryption preflight, --luks-passphrase rejection, and --luks-passphrase-fd verified", flush=True)
+
+        # 6. Graphical installer wizard headless self-test
+        gui_installer = repo_root / "distro" / "installer" / "os1-install-gui"
+        res_gui = subprocess.run([sys.executable, str(gui_installer), "--self-test"], capture_output=True, text=True)
+        assert res_gui.returncode == 0, f"os1-install-gui --self-test failed: {res_gui.stderr}"
+        print("[PASS] os1-install-gui headless self-test verified", flush=True)
+
+        print("[os1-installer-safety-test] ALL PHASE 18 & LUKS2 PREFLIGHT & CREDENTIAL SAFETY TESTS PASSED.", flush=True)
         return 0
     finally:
         # Restore write permission on disk_ro before cleanup

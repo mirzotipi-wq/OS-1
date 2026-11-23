@@ -14,11 +14,12 @@ Prior to Phase 22:
 
 ## Decision
 
-1. **Honest Kernel Baseline Policy (RC vs. GA):**
-   - `OS-1 1.0-rc2` ships kernel `7.4.0-rc3-os1` built directly from this repository's kernel source tree. It is explicitly labeled as a **release-candidate kernel**, never as a final stable or LTS kernel.
-   - **Mandatory Pre-GA Gate:** Before any `OS-1 1.0` General Availability (GA) release is tagged, the OS-1 kernel branch **MUST** be rebased onto or pinned to an official upstream **final stable** or **Long-Term Support (LTS)** Linux release (zero `-rc` suffix), with a documented security-update cadence tracking upstream `stable` point releases.
-2. **Modular + Built-In x86-64 Desktop Driver Baseline:**
-   - Boot-critical storage, UEFI, Virtio, filesystems, USB host/HID, ACPI power, TPM, and Netfilter/nftables remain built-in (`=y`) in `distro/kernel/os1_x86_64.fragment` for deterministic early boot and firewall activation.
+1. **Pinned Upstream Linux LTS Baseline (Completed in `1.0-rc3`):**
+   - `OS-1 1.0-rc3` and `1.0 GA` build from a pinned, SHA-256-verified upstream **Linux LTS** tarball defined in [`distro/kernel/KERNEL_LTS.env`](../../distro/kernel/KERNEL_LTS.env) (currently **Linux `6.12.119` LTS**, `6.12.119-os1`, zero `-rc` suffix), downloaded and checksum-verified from `cdn.kernel.org` with optional `--source-dir` / `OS1_KERNEL_SRC` local override.
+   - `distro/kernel/build-kernel.sh` enforces a hard gate rejecting any `-rc` kernel release unless `OS1_ALLOW_RC_KERNEL=1` is explicitly set.
+   - Security updates track upstream `6.12.y` LTS point releases via 1-file manifest updates in `distro/kernel/KERNEL_LTS.env`.
+2. **Modular + Built-In x86-64 Desktop Driver, Security & Encryption Baseline:**
+   - Boot-critical storage, UEFI, Virtio, filesystems, USB host/HID, ACPI power, TPM, Netfilter/nftables, **AppArmor LSM**, **Yama**, **`dm-crypt`/LUKS2**, and **`zram`** remain built-in (`=y`) in `distro/kernel/os1_x86_64.fragment` for deterministic early boot, encrypted root unlock, and security enforcement.
    - Physical x86-64 desktop hardware drivers (Intel `i915`, AMD `amdgpu`, NVIDIA open `nouveau`, Intel/Realtek Ethernet, Intel `iwlwifi`/`iwlmvm`, Qualcomm `ath10k`/`ath11k`, Realtek `rtw88`, HD Audio & USB Audio, Bluetooth `btusb`, I2C/multitouch touchpads, UVC webcams) are enabled as loadable kernel modules (`=m`) with compressed firmware loader support (`CONFIG_FW_LOADER_COMPRESS_XZ`/`ZSTD`).
 3. **Consistent Module Build, Audit & Packaging:**
    - CI kernel builds invoke `distro/kernel/build-kernel.sh --with-modules` so `/lib/modules/<krel>` is always compiled, indexed via `depmod`, and packaged into the versioned `linux-image-os1-<krel>` Debian package.

@@ -108,7 +108,7 @@ def run_self_test() -> int:
         prov_path = os.path.join(kdir, "provenance.json")
         with open(prov_path, "w", encoding="utf-8") as f:
             json.dump({
-                "kernel_release": "7.4.0-rc3-os1",
+                "kernel_release": "6.12.119-os1",
                 "git_sha": "0" * 40,
                 "compiler": "gcc-selftest",
                 "artifacts": {

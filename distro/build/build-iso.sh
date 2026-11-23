@@ -55,7 +55,9 @@ mksquashfs "${ROOTFS_DIR}" "${ISO_WORK}/live/filesystem.squashfs" \
     -noappend \
     -no-progress
 
-KERNEL_REL="7.4.0-rc3-os1"
+# shellcheck source=../kernel/KERNEL_LTS.env
+source "${REPO_ROOT}/distro/kernel/KERNEL_LTS.env"
+KERNEL_REL="${OS1_KERNEL_VERSION}-os1"
 if [[ -f "${KERNEL_PROV}" ]]; then
     KERNEL_REL="$(python3 -c "import json; print(json.load(open('${KERNEL_PROV}'))['kernel_release'])")"
 fi
@@ -71,7 +73,7 @@ set default=0
 set timeout=3
 
 menuentry "OS-1 Live (${KERNEL_REL})" {
-    linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 net.ifnames=0 panic=-1
+    linux /boot/vmlinuz console=tty0 console=ttyS0,115200n8 net.ifnames=0 apparmor=1 security=apparmor panic=-1
     initrd /boot/initrd.img
 }
 
