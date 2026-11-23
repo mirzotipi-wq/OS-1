@@ -74,14 +74,14 @@ def main() -> int:
             vm_iso.login("os1", "os1", "os1")
             vm_iso.run_cmd("printf 'os1\\n' | sudo -S -v", "SUDO_AUTH", timeout=20.0)
 
-            # Supply both user password and LUKS2 passphrase via private file descriptors (3 & 4)
+            # Run python3 as root so sudo does not close private pipe fds >= 3 before os1-install
             install_cmd = (
-                f"python3 -c \""
+                f"sudo -n python3 -c \""
                 f"import base64, os, subprocess, sys; "
                 f"p_r, p_w = os.pipe(); l_r, l_w = os.pipe(); "
                 f"os.write(p_w, base64.b64decode('{alice_b64}')); os.close(p_w); "
                 f"os.write(l_w, base64.b64decode('{luks_b64}')); os.close(l_w); "
-                f"r = subprocess.run(['sudo', '-n', '/usr/sbin/os1-install', "
+                f"r = subprocess.run(['/usr/sbin/os1-install', "
                 f"'--disk', '/dev/vda', '--user', 'alice', '--hostname', 'os1-luks', "
                 f"'--timezone', 'UTC', '--encrypt', '--password-fd', str(p_r), "
                 f"'--luks-passphrase-fd', str(l_r), '--confirm-erase-disk', "

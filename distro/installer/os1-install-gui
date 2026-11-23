@@ -93,6 +93,59 @@ def build_install_argv(
     return cmd
 
 
+def exec_install_with_pipes(params: dict, on_line=None) -> int:
+    """Invoke os1-install directly as root using private os.pipe() credential fds."""
+    pw_r, pw_w = os.pipe()
+    luks_r = luks_w = None
+    pass_fds = [pw_r]
+    try:
+        os.write(pw_w, (params["password"] + "\n").encode("utf-8"))
+        os.close(pw_w)
+        pw_w = -1
+
+        if params.get("encrypt"):
+            luks_r, luks_w = os.pipe()
+            os.write(luks_w, (params["luks_pass"] + "\n").encode("utf-8"))
+            os.close(luks_w)
+            luks_w = -1
+            pass_fds.append(luks_r)
+
+        argv = build_install_argv(
+            disk=params["disk"],
+            user=params["user"],
+            hostname=params["hostname"],
+            timezone=params["timezone"],
+            locale=params["locale"],
+            encrypt=bool(params.get("encrypt")),
+            password_fd=pw_r,
+            luks_fd=luks_r,
+            confirm=True,
+            use_pkexec=False,
+        )
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            pass_fds=tuple(pass_fds),
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            text_line = line.rstrip("\n")
+            if on_line is not None:
+                on_line(text_line)
+            else:
+                print(text_line, flush=True)
+        return proc.wait()
+    finally:
+        for fd in (pw_r, pw_w, luks_r, luks_w):
+            if fd is not None and fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
 def run_self_test() -> int:
     """Headless unit test verifying command builder and security invariants."""
     argv = build_install_argv(
@@ -148,55 +201,29 @@ def launch_gui() -> int:
             self.params = params
 
         def run(self) -> None:
-            pw_r, pw_w = os.pipe()
-            luks_r = luks_w = None
-            pass_fds = [pw_r]
             try:
-                os.write(pw_w, (self.params["password"] + "\n").encode("utf-8"))
-                os.close(pw_w)
-                pw_w = -1
+                if os.geteuid() != 0:
+                    payload = json.dumps(self.params).encode("utf-8")
+                    proc = subprocess.Popen(
+                        ["pkexec", os.path.abspath(__file__), "--exec-root-stdin"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=False,
+                    )
+                    assert proc.stdin is not None and proc.stdout is not None
+                    proc.stdin.write(payload)
+                    proc.stdin.close()
+                    for raw_line in proc.stdout:
+                        self.output_line.emit(raw_line.decode("utf-8", errors="replace").rstrip("\n"))
+                    self.finished_rc.emit(proc.wait())
+                    return
 
-                if self.params["encrypt"]:
-                    luks_r, luks_w = os.pipe()
-                    os.write(luks_w, (self.params["luks_pass"] + "\n").encode("utf-8"))
-                    os.close(luks_w)
-                    luks_w = -1
-                    pass_fds.append(luks_r)
-
-                argv = build_install_argv(
-                    disk=self.params["disk"],
-                    user=self.params["user"],
-                    hostname=self.params["hostname"],
-                    timezone=self.params["timezone"],
-                    locale=self.params["locale"],
-                    encrypt=self.params["encrypt"],
-                    password_fd=pw_r,
-                    luks_fd=luks_r,
-                    confirm=True,
-                    use_pkexec=True,
-                )
-                proc = subprocess.Popen(
-                    argv,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    pass_fds=tuple(pass_fds),
-                )
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    self.output_line.emit(line.rstrip("\n"))
-                rc = proc.wait()
+                rc = exec_install_with_pipes(self.params, on_line=self.output_line.emit)
                 self.finished_rc.emit(rc)
             except Exception as exc:
                 self.output_line.emit(f"ERROR: {exc}")
                 self.finished_rc.emit(1)
-            finally:
-                for fd in (pw_r, pw_w, luks_r, luks_w):
-                    if fd is not None and fd >= 0:
-                        try:
-                            os.close(fd)
-                        except OSError:
-                            pass
 
     class OS1InstallerWizard(QWizard):
         def __init__(self) -> None:
@@ -382,9 +409,13 @@ def launch_gui() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="OS-1 Graphical Installer")
     parser.add_argument("--self-test", action="store_true", help="Run headless self-test and exit")
+    parser.add_argument("--exec-root-stdin", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.self_test:
         return run_self_test()
+    if args.exec_root_stdin:
+        params = json.loads(sys.stdin.read())
+        return exec_install_with_pipes(params)
     return launch_gui()
 
 

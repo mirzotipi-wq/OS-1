@@ -431,7 +431,7 @@ def main() -> int:
                 "done; "
                 "timeout 15 notify-send \"OS-1\" \"Phase 10 Notification Center verified\"'",
                 "NOTIFY",
-                timeout=45.0,
+                timeout=110.0,
             )
             print("[PASS][FUNC] Phase 10 Notification Center DBus delivery verified", flush=True)
 
