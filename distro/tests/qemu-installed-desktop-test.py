@@ -352,14 +352,18 @@ def main() -> int:
             )
             print("[PASS][P21] Graphical SDDM login started alice Wayland session (kwin_wayland + plasmashell + pipewire)", flush=True)
 
-            # Wait for os1-shell-init atomic stamp
+            # Wait for os1-shell-init atomic stamp (bounded 180s for TCG first-login with Discover/Flatpak)
             vm.run_cmd(
-                "for i in $(seq 1 45); do test -f /home/alice/.config/.os1-shell-initialized && break; sleep 2; done; "
-                "test -f /home/alice/.config/.os1-shell-initialized && "
+                "for i in $(seq 1 90); do test -f /home/alice/.config/.os1-shell-initialized && break; sleep 2; done; "
+                "if [ ! -f /home/alice/.config/.os1-shell-initialized ]; then "
+                "  echo '=== os1-shell-init.log ==='; "
+                "  cat /home/alice/.local/share/os1-shell-init.log 2>/dev/null || echo '(missing)'; "
+                "  exit 1; "
+                "fi; "
                 "grep -q 'org.kde.plasma.appmenu' /home/alice/.config/plasma-org.kde.plasma.desktop-appletsrc && "
                 "grep -q 'org.kde.plasma.icontasks' /home/alice/.config/plasma-org.kde.plasma.desktop-appletsrc",
                 "SHELL_INIT_STAMP",
-                timeout=110.0,
+                timeout=200.0,
             )
             w, h, px = vm.screenshot(
                 os.path.join(tmp, "alice-light.ppm"),

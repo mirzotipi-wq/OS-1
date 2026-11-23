@@ -57,13 +57,13 @@ run_required() {
     fi
 }
 
-run_required "apply look-and-feel org.os1.desktop" timeout 25 plasma-apply-lookandfeel -a org.os1.desktop
-run_required "apply colorscheme OS1Light" timeout 20 plasma-apply-colorscheme OS1Light
+run_required "apply look-and-feel org.os1.desktop" timeout 45 plasma-apply-lookandfeel -a org.os1.desktop
+run_required "apply colorscheme OS1Light" timeout 30 plasma-apply-colorscheme OS1Light
 
 LAYOUT_JS="${OS1_LAYOUT_JS:-/usr/share/plasma/look-and-feel/org.os1.desktop/contents/layouts/org.kde.plasma.desktop-layout.js}"
 if [[ -f "${LAYOUT_JS}" ]]; then
     run_required "evaluate OS-1 Plasma layout" \
-        timeout 25 qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$(cat "${LAYOUT_JS}")"
+        timeout 45 qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$(cat "${LAYOUT_JS}")"
 else
     echo "[os1-shell-init] ERROR: Layout script not found: ${LAYOUT_JS}"
     FAILED=1
@@ -71,7 +71,7 @@ fi
 
 WALLPAPER="${OS1_WALLPAPER:-/usr/share/wallpapers/OS1Horizon/contents/images/1920x1080.png}"
 if [[ -f "${WALLPAPER}" ]]; then
-    run_required "apply OS1Horizon wallpaper" timeout 20 plasma-apply-wallpaperimage "${WALLPAPER}"
+    run_required "apply OS1Horizon wallpaper" timeout 30 plasma-apply-wallpaperimage "${WALLPAPER}"
 else
     echo "[os1-shell-init] ERROR: Wallpaper not found: ${WALLPAPER}"
     FAILED=1
