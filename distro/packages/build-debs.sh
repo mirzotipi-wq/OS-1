@@ -158,7 +158,7 @@ mkdir -p "${REL_ROOT}/DEBIAN" "${REL_ROOT}/etc/sysctl.d" "${REL_ROOT}/etc/apt/ap
 
 install -m 0644 "${REPO_ROOT}/distro/VERSION" "${REL_ROOT}/usr/share/os1/VERSION"
 install -m 0644 "${REPO_ROOT}/distro/security/90-os1-hardening.conf" "${REL_ROOT}/etc/sysctl.d/90-os1-hardening.conf"
-install -m 0644 "${REPO_ROOT}/distro/security/20auto-upgrades" "${REL_ROOT}/etc/apt/apt.conf.d/20auto-upgrades"
+install -m 0644 "${REPO_ROOT}/distro/security/25os1-auto-upgrades" "${REL_ROOT}/etc/apt/apt.conf.d/25os1-auto-upgrades"
 install -m 0644 "${REPO_ROOT}/distro/security/50unattended-upgrades-os1" "${REL_ROOT}/etc/apt/apt.conf.d/50unattended-upgrades-os1"
 cat > "${REL_ROOT}/etc/os-release" <<EOF
 PRETTY_NAME="${OS1_NAME} ${OS1_VERSION} (Debian ${OS1_DEBIAN_SUITE} base)"

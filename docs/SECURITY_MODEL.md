@@ -28,7 +28,7 @@
 
 - OS-1 packages and versioned LTS kernels are distributed via a GPG-signed Debian APT repository (`InRelease` / `Release.gpg`), published to GitHub Pages (`https://mirzotipi-wq.github.io/OS-1/apt`) on tagged releases.
 - The public repository verification key is installed via `os1-keyring`; `trusted=yes` is forbidden in production configurations.
-- `unattended-upgrades` is preconfigured (`/etc/apt/apt.conf.d/20auto-upgrades` and `50unattended-upgrades-os1`) to apply Debian security updates and signed OS-1 updates automatically without forcing automatic reboots.
+- `unattended-upgrades` is preconfigured (`/etc/apt/apt.conf.d/25os1-auto-upgrades` and `50unattended-upgrades-os1`) to apply Debian security updates and signed OS-1 updates automatically without forcing automatic reboots.
 - Production release signing supports `OS1_GPG_PRIVATE_KEY` / `OS1_GPG_PASSPHRASE` in CI or air-gapped offline signing via `distro/tools/os1-sign-release.sh`. Private signing keys are never committed to the repository.
 
 ## 6. UEFI Secure Boot (MOK Tooling)
