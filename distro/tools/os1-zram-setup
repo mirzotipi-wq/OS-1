@@ -2,19 +2,20 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # OS-1 deterministic compressed RAM swap (zram) setup helper.
 set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 ACTION="${1:-start}"
 
 case "${ACTION}" in
     start)
-        if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/dev/zram0'; then
+        if grep -q '/dev/zram0' /proc/swaps 2>/dev/null; then
             echo "[os1-zram] /dev/zram0 is already active."
             exit 0
         fi
         if [[ ! -b /dev/zram0 ]]; then
             modprobe zram num_devices=1 2>/dev/null || true
         fi
-        if [[ ! -b /dev/zram0 ]]; then
+        if [[ ! -b /dev/zram0 || ! -d /sys/block/zram0 ]]; then
             echo "[os1-zram] WARN: /dev/zram0 not available in kernel; skipping zram swap." >&2
             exit 0
         fi
@@ -27,29 +28,35 @@ case "${ACTION}" in
         elif (( zram_mb > 4096 )); then
             zram_mb=4096
         fi
+        zram_bytes=$(( zram_mb * 1024 * 1024 ))
 
-        algo="zstd"
-        if [[ -r /sys/block/zram0/comp_algorithm ]]; then
-            if ! grep -qw zstd /sys/block/zram0/comp_algorithm; then
-                if grep -qw lz4 /sys/block/zram0/comp_algorithm; then
-                    algo="lz4"
-                else
-                    algo="lzo"
+        # Reset device cleanly before configuring
+        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
+
+        # Prefer zstd > lz4 > lzo-rle only if supported by the running kernel; otherwise keep kernel default
+        chosen_algo="default"
+        if [[ -w /sys/block/zram0/comp_algorithm ]]; then
+            avail="$(cat /sys/block/zram0/comp_algorithm 2>/dev/null || true)"
+            for cand in zstd lz4 lzo-rle lzo; do
+                if echo "${avail}" | grep -qw "${cand}"; then
+                    if echo "${cand}" > /sys/block/zram0/comp_algorithm 2>/dev/null; then
+                        chosen_algo="${cand}"
+                        break
+                    fi
                 fi
-            fi
+            done
         fi
 
-        zramctl --reset /dev/zram0 2>/dev/null || true
-        zramctl /dev/zram0 --algorithm "${algo}" --size "${zram_mb}M"
+        echo "${zram_bytes}" > /sys/block/zram0/disksize
         mkswap -L OS1_ZRAM /dev/zram0 >/dev/null
         swapon -p 100 /dev/zram0
-        echo "[os1-zram] Activated /dev/zram0 (${zram_mb} MiB, algo=${algo}, priority=100)"
+        echo "[os1-zram] Activated /dev/zram0 (${zram_mb} MiB, algo=${chosen_algo}, priority=100)"
         ;;
     stop)
-        if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/dev/zram0'; then
+        if grep -q '/dev/zram0' /proc/swaps 2>/dev/null; then
             swapoff /dev/zram0
         fi
-        zramctl --reset /dev/zram0 2>/dev/null || true
+        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
         ;;
     *)
         echo "Usage: $0 {start|stop}" >&2
