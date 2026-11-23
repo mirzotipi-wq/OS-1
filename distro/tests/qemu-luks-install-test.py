@@ -117,13 +117,13 @@ def main() -> int:
                 "findmnt -n -o SOURCE / && "
                 "findmnt -n -o FSTYPE /boot && "
                 "uname -r && "
-                "cat /sys/module/apparmor/parameters/enabled && "
-                "swapon --show --noheadings && "
+                "echo AA=$(cat /sys/module/apparmor/parameters/enabled) && "
+                "cat /proc/swaps && "
                 "test \"$(systemctl is-active ufw.service)\" = 'active' && echo UFW_OK",
                 "LUKS_VERIFY",
                 timeout=60.0,
             )
-            for needle in ("/dev/mapper/os1_crypt", "ext4", expected_krel, "Y", "zram", "UFW_OK"):
+            for needle in ("/dev/mapper/os1_crypt", "ext4", expected_krel, "AA=Y", "zram0", "UFW_OK"):
                 if needle not in out:
                     raise RuntimeError(f"Encrypted boot verification missing {needle!r}:\n{out}")
             print(f"[PASS][E2E] Encrypted root (/dev/mapper/os1_crypt), LTS kernel ({expected_krel}), AppArmor, zram, and UFW verified!", flush=True)

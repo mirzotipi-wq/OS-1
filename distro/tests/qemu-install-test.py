@@ -330,15 +330,18 @@ def main() -> int:
 
             # Verify AppArmor LSM, sysctl hardening, and zram swap on installed Boot 1
             hard_out = vm_inst1.run_cmd(
-                "cat /sys/module/apparmor/parameters/enabled && "
-                "sysctl -n kernel.kptr_restrict kernel.dmesg_restrict kernel.yama.ptrace_scope && "
-                "swapon --show --noheadings",
+                "echo AA=$(cat /sys/module/apparmor/parameters/enabled) && "
+                "echo KPTR=$(cat /proc/sys/kernel/kptr_restrict) && "
+                "echo DMESG=$(cat /proc/sys/kernel/dmesg_restrict) && "
+                "echo PTRACE=$(cat /proc/sys/kernel/yama/ptrace_scope) && "
+                "cat /proc/swaps",
                 "HARDENING_BOOT1",
                 timeout=30.0,
             )
-            if "Y" not in hard_out or "zram" not in hard_out:
-                raise RuntimeError(f"Installed Boot 1 hardening/zram check failed:\n{hard_out}")
-            print("[PASS][FUNC] Installed Boot 1 AppArmor LSM, sysctl hardening, and zram swap verified", flush=True)
+            for needle in ("AA=Y", "KPTR=2", "DMESG=1", "PTRACE=1", "zram0"):
+                if needle not in hard_out:
+                    raise RuntimeError(f"Installed Boot 1 hardening/zram check missing {needle!r}:\n{hard_out}")
+            print("[PASS][FUNC] Installed Boot 1 AppArmor LSM, sysctl hardening (kptr=2, dmesg=1, ptrace=1), and zram0 swap verified", flush=True)
 
             # If full desktop ISO was installed, verify desktop a11y binary & fs suite
             vm_inst1.run_cmd(
